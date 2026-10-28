@@ -1,0 +1,160 @@
+## 打 tag 即发布到 npm：npm 通过 OIDC 信任本 workflow，因此不需要任何 token，
+## 也不需要两步验证码。绑定信息见同目录 README.md。
+##
+## 要点（改这个文件时别破坏）：
+##   - 文件名必须与 npm 侧「Workflow filename」一致：release.yml
+##   - id-token: write 是 OIDC 的唯一硬要求，删掉就退化成需要 token
+##   - registry-url 指向官方 registry（本机 .npmrc 默认是淘宝镜像，必须覆盖）
+##   - contents: write 是建 Release 需要的：GitHub Release 与 tag 是两回事
+##   - package-manager-cache: false —— 官方要求在发布构建里禁用缓存。
+##     注意这是 setup-node v7 才有的输入：v4 上它不存在，会报
+##     "Unexpected input(s) 'package-manager-cache'" 并静默失效。
+##   - action 版本要 v7/v6：v4 系列自身跑在 Node 20 上，GitHub 已弃用，
+##     会刷一堆 deprecation 告警（v7 跑在 node24）。
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # 手动触发默认只跑构建+测试，不发版——这样可以用它验证 CI 而不误发 npm。
+  # 确实要就着手动重发时，勾上 publish 输入。
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: '手动触发时也执行发布（默认只跑到测试）'
+        type: boolean
+        default: false
+      create_release:
+        description: '同时建 GitHub Release（作者会显示为 github-actions[bot]，仅作兜底）'
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write # OIDC：npm 据此确认「是本人授权的 workflow」
+  contents: write # 建 GitHub Release 需要写权限（只读会 403）
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      # pnpm 在跑任何 script 之前会做一次依赖状态检查，必要时自动执行
+      # `pnpm install`（不带我们的命令行参数）。那个自动 install 会重新解析
+      # 版本范围，进而撞上 @deepseek-ai/dsh-* 预发布版的
+      # ERR_PNPM_NO_MATCHING_VERSION。用环境变量把配置喂给所有子进程，
+      # 自动 install 才会和上面那次显式 install 用同一套设置。
+      npm_config_auto_install_peers: 'false'
+      npm_config_registry: 'https://registry.npmjs.org'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          # package.json 没有 packageManager 字段，必须显式指定版本，
+          # 否则 action 会报 "No pnpm version is specified"
+          version: '11'
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          # 构建用的 Node；action 自身跑哪个 Node 由 action 版本决定。
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Install dependencies
+        # 必须用 --frozen-lockfile：@deepseek-ai/dsh-* 依赖锁的是 0.1.x 预发布版
+        # （如 0.1.2-rc.1），而 package.json 的范围 >=0.1.2 <0.2.0-0 按 semver
+        # 并不匹配预发布版。只有严格照 lockfile 装才不触发那次解析；放开
+        # （--no-frozen-lockfile）就报 ERR_PNPM_NO_MATCHING_VERSION。
+        #
+        # --config.auto-install-peers=false 必须显式传：lockfile 记的
+        # settings.autoInstallPeers=false 要与之一致，否则报
+        # ERR_PNPM_LOCKFILE_CONFIG_MISMATCH。
+        run: |
+          pnpm install --frozen-lockfile \
+            --registry=https://registry.npmjs.org \
+            --config.auto-install-peers=false
+
+      - name: Show resolved toolchain
+        # 失败时先看得到环境，避免把依赖问题误判成别的
+        run: |
+          node --version
+          pnpm --version
+          npm --version
+          ls node_modules/.bin | head -30
+
+      - name: Verify the tag matches package.json
+        # 只在 tag 推送时校验。手动触发时 GITHUB_REF_NAME 是分支名（main），
+        # 拿它跟版本号比必然不相等——那会让手动触发永远跑不下去。
+        if: github.event_name == 'push'
+        # 版本号对不上就中止：宁可让发布失败，也不要发出一个名不副实的版本
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "package.json=$PKG_VERSION  tag=$TAG_VERSION"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+      - name: Build
+        # 直接调用本地二进制，不走 `pnpm build`：pnpm 跑 script 前会做依赖状态
+        # 检查、必要时自动 install，那次 install 不带上面的参数，会重新触发
+        # ERR_PNPM_NO_MATCHING_VERSION。
+        run: ./node_modules/.bin/tsdown
+
+      - name: Test
+        run: ./node_modules/.bin/vitest run
+
+      - name: Publish to npm
+        if: github.event_name == 'push' || inputs.publish
+        # OIDC 自动生效；npm CLI 会先尝试 OIDC，再回退到传统 token
+        run: npm publish --ignore-scripts --access public
+
+      - name: Create the GitHub release (opt-in; needs a PAT to show a human author)
+        # 默认**不在**这里建 Release，原因是身份，不是排版。
+        #
+        # 这一步只能用 `secrets.GITHUB_TOKEN`（本仓库没有配置任何 PAT secret），
+        # 而用它建出来的 Release，作者固定显示成 `github-actions[bot]`。本项目的
+        # 历史 Release 都是维护者本人身份（XDTrees），标题也带副标题
+        # （`v1.5.1 — 保留积分改为显式保存…`）。让 CI 建，页面就会出现作者忽而是
+        # bot、标题忽而只剩版本号的参差——1.7.0 / 1.7.1 就是这么来的。
+        #
+        # 所以发布链到 npm 为止，Release 由维护者用本人凭据建；命令见同目录
+        # README 的「发版之后」一节。要恢复「推 tag 即全自动」，先加一个 PAT
+        # secret（如 `RELEASE_TOKEN`）并把下面的 GH_TOKEN 换成它，那样作者才是人。
+        #
+        # 手动触发时勾上 `create_release` 才会跑这一步（此时作者仍是 bot，仅作兜底）。
+        if: (github.event_name == 'push' || inputs.publish) && inputs.create_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          # 标题与正文都从 CHANGELOG 抽，绝不手写第二份。
+          # `## 1.7.1 — 副标题` 里的副标题会拼进 Release 标题；没有副标题就退回纯版本号。
+          node -e '
+            const { readFileSync, writeFileSync } = require("node:fs")
+            const version = process.argv[1]
+            const lines = readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/)
+            const at = lines.findIndex(l => l.startsWith("## " + version + " "))
+            if (at < 0) { console.error("no CHANGELOG section for " + version); process.exit(1) }
+            const heading = lines[at].slice(3).trim()
+            const rest = lines.slice(at + 1)
+            const end = rest.findIndex(l => l.startsWith("## "))
+            writeFileSync("release-body.md", (end < 0 ? rest : rest.slice(0, end)).join("\n").trim() + "\n")
+            const dash = heading.indexOf(" — ")
+            const subtitle = dash < 0 ? "" : heading.slice(dash + 3).trim()
+            writeFileSync("release-title.txt", subtitle === "" ? "v" + version : "v" + version + " — " + subtitle)
+          ' "$VERSION"
+          gh release create "v$VERSION" \
+            --title "$(cat release-title.txt)" \
+            --notes-file release-body.md \
+            --verify-tag

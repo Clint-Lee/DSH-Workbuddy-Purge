@@ -1,0 +1,12 @@
+# DSH WorkBuddy XD Pool bundle patch
+#
+# 本包只负责模型池：注册 provider `workbuddy-xdpool`，把本机已登录的 WorkBuddy
+# 账号合成一个自动切换的池。提示清洗 / 破甲 / 演练台由同仓库的
+# `packages/dsh-purge` 提供（安装为 `dsh-purge`），两者各自维护自己的 patch，
+# 互不覆盖对方条目。
+#
+# 之所以不把 purge 的条目写进这里：DSH 校验 patch 条目的 `name` 必须与目标条目
+# 同名，`dsh-workbuddy-xdpool/purge` 这种子路径名会被判 mismatch 并跳过。
+- insert:
+    - id: llm-workbuddy-xdpool
+      name: dsh-workbuddy-xdpool

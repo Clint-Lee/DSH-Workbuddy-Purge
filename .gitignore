@@ -1,0 +1,30 @@
+node_modules/
+.pnpm-store/
+# NOTE: lib/ is intentionally tracked. Shipping the built output means a
+# `dsh plugin add github:...` install needs no install-time script: pnpm 11
+# blocks those by default, and a missing build leaves no lib/index.js to load.
+# Re-run `pnpm build` and commit lib/ alongside any src change.
+coverage/
+*.log
+.env
+.DS_Store
+.dsh-vision-router/
+
+# 鏈湴鐢ㄧ殑涓€娆℃€?涓棿鏂囦欢锛屼笉灞炰簬浠撳簱鍐呭
+.ghtok
+.gh-token.tmp
+release-body.md
+.releases.json
+.release-bodies.json
+.m.txt
+.cm.txt
+
+# 寰呭鐞嗙殑鎴浘鏆傚瓨
+.shot-*.png
+
+# Local deployment backups of lib/ (never commit these)
+_backup-lib-*/
+
+# probe artifacts may contain the real system prompt / tool table / session slices
+probe/data/
+probe/*.log
