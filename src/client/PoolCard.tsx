@@ -889,11 +889,13 @@ export function PoolCard({ t, settingsScope }: PoolCardProps) {
       : state === 'ok'
         ? (t?.('row.ok') ?? 'Healthy')
         : (t?.('row.allCooling') ?? 'All cooling')
+  // The panel shows state, not plumbing: the loopback URL (and with it the
+  // package name) is an implementation detail, so it stays out of the copy.
   const shimRunning = status?.shim.running === true
   const shimHint = status === undefined
     ? null
     : shimRunning
-      ? `${t?.('row.shimRunning') ?? 'Provider listening'}${status.shim.baseUrl === undefined ? '' : ` · ${status.shim.baseUrl}`}`
+      ? (t?.('row.shimRunning') ?? 'Provider listening')
       : (t?.('row.shimStopped') ?? 'Provider loopback not running')
 
   return (
