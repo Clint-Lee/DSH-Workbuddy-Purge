@@ -934,7 +934,13 @@ export function PoolCard({ t, settingsScope }: PoolCardProps) {
               {/* Region tabs: one supplier per tab. Both are always offered, so an
                   empty side reads as "not signed in here yet" rather than the tab
                   appearing only after the user has already signed in. */}
-              <section className="dsm-workbuddy-xdpool-card dsm-workbuddy-xdpool-status">
+                {/* The status card carries the same `state` the tab dot uses: the
+              card's left spine is painted from it in CSS, so the panel reports
+              pool health with one stripe instead of a coloured banner. */}
+          <section
+            className="dsm-workbuddy-xdpool-card dsm-workbuddy-xdpool-status"
+            data-state={state}
+          >
               <div className="dsm-workbuddy-xdpool-tabs" role="tablist">
                     {status?.regions.map(region => (
                       <button
