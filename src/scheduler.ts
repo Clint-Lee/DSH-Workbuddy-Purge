@@ -58,6 +58,30 @@ export const EXPERT_SUMMON_GAP_MS = 6_000
  */
 export const EVENT_SCORE_WAIT_MS = 9_000
 
+/**
+ * How long to leave the featured skin applied before putting the account back.
+ *
+ * The appearance task is scored asynchronously; an event is normally reflected
+ * within about eight seconds. A minute is comfortably past that while still
+ * keeping the visible change brief for the user.
+ */
+export const APPEARANCE_RESTORE_DELAY_MS = 60_000
+
+/**
+ * The `resource_key` the account is put back on after the appearance task.
+ *
+ * Read out of WorkBuddy's own Local Storage (`appearance.lastApplied`), which is
+ * what the client writes when a skin is picked:
+ *
+ *   {"kind":"theme","resourceKey":"light","nameEn":"Light","vipLevel":"free",
+ *    "series":"base","appearance":"light"}
+ *
+ * So the default skin is the BASE series key "light" — it does NOT follow the
+ * `theme-xxxxxx` shape used by the featured skins. Overridable via
+ * `automation.appearanceRestoreKey` in case another build names it differently.
+ */
+export const DEFAULT_APPEARANCE_KEY = 'light'
+
 /** The app the buddy chain enters, satisfying both buddy tasks. */
 const BUDDY_APP_ID = 'cb_y5Dy46tPQGGWtueMxXbe'
 const BUDDY_APP_NAME = '企鹅教师助手'
@@ -126,6 +150,16 @@ export interface AutomationOptions {
   streakHours?: readonly number[]
   /** Hour list for the buddy travel job. */
   travelHours?: readonly number[]
+  /**
+   * Put the account back on a plain skin after the appearance task is scored.
+   * Absent reads as true — leaving the featured skin on is a side effect the user
+   * never agreed to, so the safe default is to undo it.
+   */
+  appearanceRestore?: boolean
+  /** Delay before restoring, in milliseconds (default 60_000). */
+  appearanceRestoreDelayMs?: number
+  /** `resource_key` to restore to (default `theme-default`). */
+  appearanceRestoreKey?: string
   /** Per-account serial delay, in milliseconds. */
   accountDelayMs?: number
   /** Override the gap between expert chains, in milliseconds (tests use 0). */
@@ -485,6 +519,20 @@ export class WorkBuddyScheduler {
   private readonly delayMs: number
 
   /**
+   * Skin handling for the appearance task.
+   *
+   * The task only scores when the featured theme is really selected, so applying
+   * it is unavoidable; leaving it applied is not. These three fields queue the
+   * restore and are read at fire time, so a restore scheduled just before a
+   * restart still lands on the next tick.
+   */
+  private readonly appearanceRestore: boolean
+
+  private readonly appearanceRestoreDelayMs: number
+
+  private readonly appearanceRestoreKey: string
+
+  /**
    * How long to wait for event scoring before re-reading the task list.
    * Tests set 0 so a pass does not spend nine real seconds per account.
    */
@@ -553,6 +601,9 @@ export class WorkBuddyScheduler {
     this.logger = options.logger ?? {}
     this.now = options.now ?? (() => new Date())
     this.delayMs = options.accountDelayMs ?? AUTOMATION_ACCOUNT_DELAY_MS
+    this.appearanceRestore = options.appearanceRestore !== false
+    this.appearanceRestoreDelayMs = options.appearanceRestoreDelayMs ?? APPEARANCE_RESTORE_DELAY_MS
+    this.appearanceRestoreKey = options.appearanceRestoreKey ?? DEFAULT_APPEARANCE_KEY
     this.eventScoreWaitMs = options.eventScoreWaitMs ?? EVENT_SCORE_WAIT_MS
     this.expertGapMs = options.expertGapMs ?? EXPERT_SUMMON_GAP_MS
     this.loadEarnings = options.loadEarnings
@@ -1226,6 +1277,40 @@ export class WorkBuddyScheduler {
   }
 
   /**
+   * Put the account back on a plain skin once the appearance task has scored.
+   *
+   * Fire-and-forget on purpose: the restore must not delay the rest of the pass,
+   * and a failure here must never fail the task (the points are already earned by
+   * the time this runs). Errors are logged and swallowed for that reason.
+   *
+   * The timer is unref'd where the runtime allows it so a pending restore cannot
+   * keep the process alive on shutdown; a restore that never fires leaves the
+   * featured skin on, which is exactly the old behaviour rather than a new risk.
+   */
+  private queueAppearanceRestore(credential: WorkBuddyCredential, taskCode: string): void {
+    const timer = setTimeout(() => {
+      void (async () => {
+        if (this.stopped) return
+        try {
+          await this.client.setAppearanceTheme(credential, this.appearanceRestoreKey)
+          this.logger.info?.(
+            `appearance: restored ${taskCode} skin to ${this.appearanceRestoreKey}`,
+          )
+        } catch (error) {
+          // A rejected restore key is not an error worth surfacing: the task still
+          // scored, only the skin stays as the featured theme.
+          this.logger.warn?.(
+            `appearance: could not restore skin (${this.appearanceRestoreKey}): ${String(error)}`,
+          )
+        }
+      })()
+    }, this.appearanceRestoreDelayMs)
+    // Do not hold the event loop open just for a cosmetic restore.
+    const maybeUnref = timer as unknown as { unref?: () => void }
+    if (typeof maybeUnref.unref === 'function') maybeUnref.unref()
+  }
+
+  /**
    * Build every chain that scores one task.
    *
    * Most tasks need a single chain; `template_5` needs five, because the scorer
@@ -1248,12 +1333,22 @@ export class WorkBuddyScheduler {
         return [playbookChain()]
       case 'template_5':
         return templateChains()
-      case 'Hp_Appearance':
+      case 'Hp_Appearance': {
         // The event alone is not the whole chain: the client first stores the
         // selected skin, then reports the apply on the way out of settings.
+        //
+        // That means the account really does change skin, which is a visible side
+        // effect on the user's WorkBuddy. So the featured theme is applied, the
+        // event is reported, and then — after the score has had time to land —
+        // the skin is put back. Restoring too early would race the async scorer
+        // and forfeit the points, so the wait defaults to a minute.
         await this.client.setAppearanceTheme(credential, APPEARANCE_THEME_KEY)
         if (this.delayMs > 0 && !this.stopped) await sleep(2_000)
+        if (this.appearanceRestore !== false) {
+          this.queueAppearanceRestore(credential, task.taskCode)
+        }
         return [appearanceChain()]
+      }
       case 'Library_read':
         return [libraryReadChain()]
       case 'skill_1': {

@@ -79,6 +79,12 @@ export async function buildStatus(options: StatusOptions): Promise<WorkBuddyStat
         : {},
       ...modelCooldowns.length === 0 ? {} : { modelCooldowns },
       rateLimitHits: account.rateLimitHits,
+      // The settings card renders its enable/disable pill from this field, so it
+      // has to travel with the row. It was missing here while the automation
+      // serializer already emitted it, which made the toggle save correctly (the
+      // pool stopped picking the account) but never render as off — the button
+      // looked stuck on "enabled".
+      disabled: pool.isDisabled(account.id),
       sourcePath: account.credential.sourcePath,
     }
 

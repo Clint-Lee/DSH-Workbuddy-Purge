@@ -257,6 +257,34 @@ export interface AutomationConfig {
   travelHours?: number[]
   /** How long an account rests after its credits run out, in milliseconds. */
   exhaustCooldownMs?: number
+  /**
+   * Put the account back on a plain skin after the appearance task is scored.
+   *
+   * The `Hp_Appearance` task only scores when the account really has the featured
+   * theme selected, so the scheduler has to apply it. Leaving it there means the
+   * user's WorkBuddy changes skin — which is a side effect nobody asked for.
+   * Default true: apply the theme, collect the points, then restore.
+   */
+  appearanceRestore?: boolean
+  /**
+   * How long to wait before restoring, in milliseconds. Default 60000.
+   *
+   * Scoring is asynchronous upstream (an event is usually reflected after about
+   * eight seconds), so restoring immediately can land before the task is counted.
+   * A minute is a safe margin that still keeps the visible change brief.
+   */
+  appearanceRestoreDelayMs?: number
+  /**
+   * The `resource_key` to restore to. Default "theme-default".
+   *
+   * The default is "light", read out of WorkBuddy's own Local Storage
+   * (`appearance.lastApplied`: {"kind":"theme","resourceKey":"light",
+   * "series":"base","appearance":"light"}). The plain skin is the BASE series
+   * key "light" — it does not follow the `theme-xxxxxx` shape of the featured
+   * skins. If a build rejects it the restore is a no-op: the points are already
+   * claimed, only the skin stays as the featured theme.
+   */
+  appearanceRestoreKey?: string
 }
 
 
@@ -278,6 +306,11 @@ export function automationOptions(automation: AutomationConfig | undefined): Aut
     ...automation?.taskHours === undefined ? {} : { taskHours: automation.taskHours },
     ...automation?.streakHours === undefined ? {} : { streakHours: automation.streakHours },
     ...automation?.travelHours === undefined ? {} : { travelHours: automation.travelHours },
+    ...automation?.appearanceRestore === undefined ? {} : { appearanceRestore: automation.appearanceRestore },
+    ...automation?.appearanceRestoreDelayMs === undefined
+      ? {}
+      : { appearanceRestoreDelayMs: automation.appearanceRestoreDelayMs },
+    ...automation?.appearanceRestoreKey === undefined ? {} : { appearanceRestoreKey: automation.appearanceRestoreKey },
   }
 }
 
@@ -370,6 +403,9 @@ const automationSchema = z.object({
   streakHours: z.array(z.number().step(1).min(0).max(23)).description('Local hours for streak redemption'),
   travelHours: z.array(z.number().step(1).min(0).max(23)).description('Local hours for the buddy travel loop'),
   exhaustCooldownMs: z.number().step(1).min(1000).description('How long a spent account rests, in milliseconds'),
+  appearanceRestore: z.boolean().description('Restore a plain skin after the appearance task scores (default true)'),
+  appearanceRestoreDelayMs: z.number().step(1).min(0).description('Delay before restoring the skin, in milliseconds (default 60000)'),
+  appearanceRestoreKey: z.string().description('resource_key to restore to (default theme-default)'),
 })
 
 
