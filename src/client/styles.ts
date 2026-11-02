@@ -333,14 +333,23 @@ export const POOL_CARD_CSS = `
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 .dsm-workbuddy-xdpool-account-head .dsm-workbuddy-xdpool-account-toggle{margin-left:auto}
-.dsm-workbuddy-xdpool-account-body{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+.dsm-workbuddy-xdpool-account-body{
+  display:grid;
+  grid-template-columns:minmax(150px,220px) minmax(0,1fr);
+  align-items:start;gap:0 18px;
+}
+/* Everything that is not the identity column becomes a stacked cell in the second
+   column. They were previously siblings in a flex row, which is what produced the
+   floating blocks and the ragged right edge. */
+.dsm-workbuddy-xdpool-account-body > .dsm-workbuddy-xdpool-stats,
+.dsm-workbuddy-xdpool-account-body > .dsm-workbuddy-xdpool-reserve,
+.dsm-workbuddy-xdpool-account-body > .dsm-workbuddy-xdpool-earned{
+  grid-column:2;min-width:0;
+}
 .dsm-workbuddy-xdpool-account-copy{
-  display:flex;flex-direction:column;align-items:flex-start;gap:6px;justify-content:flex-start;
-  /* A share, not a pixel cap: with a fixed 330px the identity block and the
-     credit grid drifted apart on wide panels and the last credit cell was
-     clipped by the section padding. */
-  flex:1 1 240px;min-width:0;
-  padding:0 16px 10px 0;background:transparent;
+  display:flex;flex-direction:column;align-items:flex-start;gap:4px;justify-content:flex-start;
+  grid-column:1;grid-row:1;min-width:0;align-self:start;
+  padding:2px 0 10px;background:transparent;
 }
 
 /* Pill switch: in rotation / off. */
@@ -375,7 +384,7 @@ export const POOL_CARD_CSS = `
 /* ── State pills ───────────────────────────────────────────────────────────
    One vocabulary for every state; the ink is the deep pill tone because these
    sit on tinted fills. */
-.dsm-workbuddy-xdpool-account-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.dsm-workbuddy-xdpool-account-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap;max-width:100%}
 .dsm-workbuddy-xdpool-account-tag{
   padding:1px 7px;border-radius:4px;font-size:10px;line-height:16px;font-weight:650;
   letter-spacing:.02em;
@@ -387,9 +396,10 @@ export const POOL_CARD_CSS = `
 .dsm-workbuddy-xdpool-account-tag-error,
 .dsm-workbuddy-xdpool-account-tag-dead{background:var(--wbx-err-tint);color:var(--wbx-err-pill-ink)}
 .dsm-workbuddy-xdpool-account-meta{
-  color:var(--wbx-text-3);font-size:10.5px;line-height:16px;
-  display:flex;flex-wrap:wrap;gap:9px;
+  color:var(--wbx-text-3);font-size:10.5px;line-height:15px;
+  display:flex;flex-wrap:wrap;gap:4px 10px;
   font-family:var(--wbx-mono);font-variant-numeric:tabular-nums;
+  margin:0;
 }
 .dsm-workbuddy-xdpool-account-meta-dead{color:var(--wbx-err-ink)}
 .dsm-workbuddy-xdpool-account-modelcool{display:flex;flex-wrap:wrap;gap:5px}
@@ -407,10 +417,13 @@ export const POOL_CARD_CSS = `
    only element with a tinted background: it is the answer, so it gets the one
    piece of colour the layout can afford. */
 .dsm-workbuddy-xdpool-stats{
-  display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,.6fr);gap:0;
-  flex:1 1 300px;min-width:0;max-width:100%;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 168px;
+  align-items:start;
+  min-width:0;max-width:100%;
+  border-bottom:1px solid var(--wbx-hairline-soft);
 }
-.dsm-workbuddy-xdpool-panel{display:flex;flex-direction:column;min-width:0;gap:6px;padding:10px 14px}
+.dsm-workbuddy-xdpool-panel{display:flex;flex-direction:column;min-width:0;gap:6px;padding:0 14px 12px 0}
 .dsm-workbuddy-xdpool-panel + .dsm-workbuddy-xdpool-panel{border-left:1px solid var(--wbx-hairline-soft)}
 .dsm-workbuddy-xdpool-panel-title{
   color:var(--wbx-text-3);font-size:10px;line-height:15px;
@@ -427,8 +440,11 @@ export const POOL_CARD_CSS = `
 }
 .dsm-workbuddy-xdpool-panel-packages{display:flex;flex-direction:column;gap:6px;min-width:0}
 .dsm-workbuddy-xdpool-panel-foot{
-  display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-top:7px;padding-top:7px;
-  border-top:1px solid var(--wbx-hairline-soft);color:var(--wbx-text-2);font-size:11px;line-height:17px;
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  grid-column:1/-1;
+  margin:0;padding:8px 14px 8px 0;
+  border-top:1px solid var(--wbx-hairline-soft);
+  color:var(--wbx-text-3);font-size:10.5px;line-height:16px;
 }
 .dsm-workbuddy-xdpool-panel-foot strong{
   color:var(--wbx-text-1);font-size:14px;font-weight:650;
@@ -438,13 +454,23 @@ export const POOL_CARD_CSS = `
    amounts aligned across rows. */
 .dsm-workbuddy-xdpool-packages{display:flex;flex-direction:column;gap:5px;margin:0;padding:0;list-style:none}
 .dsm-workbuddy-xdpool-packages li{
-  display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;row-gap:0;align-items:baseline;
+  display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:0;align-items:baseline;
   color:var(--wbx-text-2);font-size:11px;line-height:17px;
+  padding:3px 0;
 }
-.dsm-workbuddy-xdpool-packages-name{grid-column:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsm-workbuddy-xdpool-packages li + li{border-top:1px solid var(--wbx-hairline-soft)}
+.dsm-workbuddy-xdpool-packages-name{
+  grid-column:1;min-width:0;
+  /* Two lines beats "CodeBuddy…": a package name is how the user tells packs
+     apart, so the information has to survive. */
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;overflow-wrap:anywhere;
+}
 .dsm-workbuddy-xdpool-packages-value{
-  grid-column:2;justify-self:end;color:var(--wbx-text-1);font-size:11.5px;font-weight:620;
+  grid-column:2;justify-self:end;align-self:end;
+  color:var(--wbx-text-1);font-size:11.5px;font-weight:620;
   font-family:var(--wbx-mono);font-variant-numeric:tabular-nums;
+  white-space:nowrap;
 }
 /* Per-package deadline folds onto its own line; imminent ones are tinted. */
 .dsm-workbuddy-xdpool-packages-when{
@@ -457,10 +483,12 @@ export const POOL_CARD_CSS = `
    The wash is the state hue at very low alpha — enough to say "this is the
    number", not enough to become a coloured block. */
 .dsm-workbuddy-xdpool-panel-total{
-  position:relative;align-items:center;text-align:center;justify-content:center;
-  background:linear-gradient(180deg,
-    color-mix(in oklab,var(--wbx-ok) 7%,transparent),
-    transparent 78%);
+  position:relative;align-items:center;text-align:center;justify-content:flex-start;
+  align-self:start;
+  padding:10px 12px 12px;
+  border:1px solid var(--wbx-hairline);
+  border-radius:var(--wbx-r-sm);
+  background:color-mix(in oklab,var(--wbx-ok) 6%,transparent);
 }
 .dsm-workbuddy-xdpool-total-value{
   color:var(--wbx-ok-ink);font-size:30px;line-height:34px;font-weight:700;letter-spacing:-.03em;
@@ -655,11 +683,11 @@ export const POOL_CARD_CSS = `
 .dsm-workbuddy-xdpool-auto-job-note{flex:0 0 auto;color:var(--wbx-text-2)}
 .dsm-workbuddy-xdpool-auto-job-detail{grid-column:1/-1;color:var(--wbx-text-3);font-size:10px;line-height:15px}
 .dsm-workbuddy-xdpool-earned{
-  display:flex;flex-direction:column;gap:3px;margin-top:7px;padding-top:7px;
-  border-top:1px dashed var(--wbx-hairline-soft);font-size:10px;
+  display:flex;flex-direction:row;align-items:baseline;gap:8px;flex-wrap:wrap;
+  margin:0;padding:7px 0 10px;border-top:1px dashed var(--wbx-hairline-soft);font-size:10px;
 }
 .dsm-workbuddy-xdpool-earned-label{color:var(--wbx-text-3);font-size:10px;line-height:15px}
-.dsm-workbuddy-xdpool-earned-list{display:flex;flex-direction:column;gap:1px}
+.dsm-workbuddy-xdpool-earned-list{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline}
 .dsm-workbuddy-xdpool-earned-row{
   color:var(--wbx-ok-ink);font-family:var(--wbx-mono);font-variant-numeric:tabular-nums;
 }
@@ -671,8 +699,9 @@ export const POOL_CARD_CSS = `
 /* Reserved credits: one inline number field. An explicit Save commits the draft —
    blur must not silently rewrite a credit floor. */
 .dsm-workbuddy-xdpool-reserve{
-  display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:7px;padding-top:7px;
-  border-top:1px dashed var(--wbx-hairline-soft);font-size:10px;color:var(--wbx-text-3);
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  margin:0;padding:9px 0 0;border-top:1px solid var(--wbx-hairline-soft);
+  font-size:10px;color:var(--wbx-text-3);
 }
 .dsm-workbuddy-xdpool-reserve-label{flex:0 0 auto}
 .dsm-workbuddy-xdpool-reserve-input{
@@ -730,6 +759,10 @@ export const POOL_CARD_CSS = `
    Below 760px the credit grid stacks and the chips give up their desktop
    min-height. The spine stays: it is the cheapest status cue on a phone. */
 @media (max-width:760px){
+  .dsm-workbuddy-xdpool-account-body{grid-template-columns:minmax(0,1fr);gap:0}
+  .dsm-workbuddy-xdpool-account-body > .dsm-workbuddy-xdpool-stats,
+  .dsm-workbuddy-xdpool-account-body > .dsm-workbuddy-xdpool-reserve,
+  .dsm-workbuddy-xdpool-account-body > .dsm-workbuddy-xdpool-earned{grid-column:1}
   .dsm-workbuddy-xdpool-page{gap:14px}
   .dsm-workbuddy-xdpool-card{padding:13px 13px 15px 17px}
   .dsm-workbuddy-xdpool-stats{grid-template-columns:1fr}
