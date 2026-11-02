@@ -65,7 +65,7 @@ export const EVENT_SCORE_WAIT_MS = 9_000
  * within about eight seconds. A minute is comfortably past that while still
  * keeping the visible change brief for the user.
  */
-export const APPEARANCE_RESTORE_DELAY_MS = 60_000
+export const APPEARANCE_RESTORE_DELAY_MS = 30_000
 
 /**
  * The `resource_key` the account is put back on after the appearance task.
@@ -1290,7 +1290,9 @@ export class WorkBuddyScheduler {
   private queueAppearanceRestore(credential: WorkBuddyCredential, taskCode: string): void {
     const timer = setTimeout(() => {
       void (async () => {
-        if (this.stopped) return
+        // Restore even when the scheduler is stopped: "stopped" means no new work, not
+        // "leave the user's WorkBuddy skin changed". Swallowing the restore here was
+        // the one path that could leave the featured skin applied for good.
         try {
           await this.client.setAppearanceTheme(credential, this.appearanceRestoreKey)
           this.logger.info?.(
