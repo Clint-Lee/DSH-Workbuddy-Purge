@@ -491,10 +491,12 @@ export function isFireHour(now: Date, hours: readonly number[]): boolean {
 }
 
 /** Whether this account may be used: not switched off, not cooling. */
-function eligible(account: WorkBuddyAccount, now: number): boolean {
+function eligible(account: WorkBuddyAccount, now: number, jobKind?: AutomationJobKind): boolean {
   if (account.cooldownUntilMs > now) return false
   // The growth system is CN-only; a global account has no task centre at all.
-  if (regionOf(account.credential.domain) === 'global') return false
+  // 国际版没有签到活动（/v2/billing/meter/checkin 等全 404），只排除 checkin；
+  // 任务/上报/旅行走 activity/growth/*，国际版同样可用，不该一并无视。
+  if (jobKind === 'checkin' && regionOf(account.credential.domain) === 'global') return false
   return true
 }
 
@@ -1053,7 +1055,7 @@ export class WorkBuddyScheduler {
     const detail: string[] = []
     let progressNote: string | undefined
     
-    const accounts = this.accountsInOrder()
+    const accounts = this.accountsInOrder(kind)
 
     // Pass 1 (tasks only): light up the client-scored tasks for EVERY account
     // before claiming any of them. Claiming inside this loop would find each
@@ -1177,11 +1179,11 @@ export class WorkBuddyScheduler {
    * Disabled accounts are excluded here rather than filtered by the caller so a
    * card switch takes effect on the next pass without any event plumbing.
    */
-  private accountsInOrder(): WorkBuddyAccount[] {
+  private accountsInOrder(jobKind?: AutomationJobKind): WorkBuddyAccount[] {
     const now = Date.now()
     return this.pool.list().filter(account => {
       if (this.pool.isDisabled(account.id)) return false
-      return eligible(account, now)
+      return eligible(account, now, jobKind)
     })
   }
 
