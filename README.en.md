@@ -19,29 +19,25 @@ An account gets rate-limited or runs out of credits? The request just moves to t
 
 ## Screenshots
 
-> These are rendered from a live running instance — real accounts, real credit
-> balances, real model roster. Not mockups. Dark is DSH's default theme.
+> Account names, balances and dates in these images are masked. Only the layout
+> is shown.
 
 **The plugin card (Settings → WorkBuddy pool)**
 
-![WorkBuddy pool card: CN/global tabs, pool health with a status spine down the left edge, the account-rotation picker, per-account credit packages and totals, check-in streak, the model directory, and the points automation section](assets/settings-card.png)
+The settings panel uses top-level tabs and this plugin is one of them. The
+vertical rule down the left edge of the card *is* the pool health: green when an
+account can serve, amber when every account is cooling, red when a sign-in was
+rejected. Each account row carries its own total, check-in streak and button.
 
-**One account in detail (packages, total, today's automation earnings)**
+![WorkBuddy pool card: title, region switch, pool health with a status spine, per-account total and check-in](assets/settings-card.png)
 
-Every credit package is listed with its own expiry, the total is the largest
-number on the page, and the top-right corner carries the check-in streak and
-button. The "today's automation" line says how many credits this account has
-already earned today and from which source.
+**Points automation**
 
-![One account: identity and status tags on the left, today's automation earnings, a grid of credit packages with the total on the right, and the check-in streak and button](assets/account-detail.png)
+One master switch plus a "run now" button. With it enabled the plugin checks in,
+reports activity, claims task and streak rewards, and runs the buddy travel loop
+on a daily schedule; "run now" triggers one pass by hand.
 
-**Light theme**
-
-The styling follows DSH's own theme setting. In light mode the surfaces are
-white and hierarchy comes from hairlines and whitespace; in dark mode it comes
-from luminance steps. Both themes share one stylesheet.
-
-![The same card in the light theme](assets/settings-card-light.png)
+![Points automation: master switch, run-now button, today's earnings](assets/automation-panel.png)
 
 ## Features
 
