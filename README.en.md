@@ -19,21 +19,29 @@ An account gets rate-limited or runs out of credits? The request just moves to t
 
 ## Screenshots
 
-**The plugin card (Settings → Plugins → DSH WorkBuddy XD Pool)**
+> These are rendered from a live running instance — real accounts, real credit
+> balances, real model roster. Not mockups. Dark is DSH's default theme.
 
-![WorkBuddy pool card: CN/global tabs, pool health, account panels with credit packages, per-account check-in, the points-automation panel, and the model directory](assets/settings-card.png)
+**The plugin card (Settings → WorkBuddy pool)**
 
-**The points-automation panel**
+![WorkBuddy pool card: CN/global tabs, pool health with a status spine down the left edge, the account-rotation picker, per-account credit packages and totals, check-in streak, the model directory, and the points automation section](assets/settings-card.png)
 
-![Points automation: the master switch, a Run now button, each job's last run with the tasks it actually collected, and the streak countdown](assets/automation-panel.png)
+**One account in detail (packages, total, today's automation earnings)**
 
-**Model picker (CN and global as two separate groups)**
+Every credit package is listed with its own expiry, the total is the largest
+number on the page, and the top-right corner carries the check-in streak and
+button. The "today's automation" line says how many credits this account has
+already earned today and from which source.
 
-![Model picker: the CN and global groups each list their own models with credit multipliers and promo tags](assets/model-picker.png)
+![One account: identity and status tags on the left, today's automation earnings, a grid of credit packages with the total on the right, and the check-in streak and button](assets/account-detail.png)
 
-**CN / global dual provider (separate accounts, credits and models, usable at the same time)**
+**Light theme**
 
-![Switching between CN and global; the side that is not signed in shows that region's sign-in steps](assets/region-tabs.png)
+The styling follows DSH's own theme setting. In light mode the surfaces are
+white and hierarchy comes from hairlines and whitespace; in dark mode it comes
+from luminance steps. Both themes share one stylesheet.
+
+![The same card in the light theme](assets/settings-card-light.png)
 
 ## Features
 
