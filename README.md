@@ -121,32 +121,45 @@
 > 面板顶部是平级标签：`通用设置 / 模型 / 内置插件 / Agent 预设 / WorkBuddy 积分池` —— 本插件就是最后那个。
 > （早期版本这里叫「XD Pool」；界面标题现为「WorkBuddy 积分池」，位置不变。）
 
-**方式一：从 npm 安装（推荐）**
+**方式 A：一键脚本（推荐，适合不熟悉命令行的）**
 
-```sh
-# dsh 不在 PATH 时，用 node ~/.dsh/profiles/node_modules/@deepseek-ai/dsh/lib/bin.js 代替 dsh
-dsh plugin --profile desktop add dsh-workbuddy-xdpool
+下载 [dist/DSH-Workbuddy-Purge-v1.9.7.zip](dist/DSH-Workbuddy-Purge-v1.9.7.zip)，
+解压到任意位置，双击 **`一键安装.bat`**，然后完全退出 DSH 再打开。
+
+脚本会建立 junction 链接指向解压目录，所以**以后这个目录不要删除或移动**；
+仓库更新时只要重新解压覆盖并再跑一次脚本即可。
+
+**方式 B：在 DSH 客户端里粘贴仓库链接**
+
+设置 → 插件 → 添加插件，粘贴：
+
+```
+https://github.com/Clint-Lee/DSH-Workbuddy-Purge
 ```
 
-> 推荐 npm：需要拉取的依赖只有插件自己（**约 1 个包，几秒搞定**）。
-> 从 GitHub 源码装会连带装开发依赖（构建器、测试框架等几百个包），慢得多。
+DSH 会用 pnpm 把仓库作为包安装进来。**这种方式装的是快照**，仓库之后
+再有更新不会自动同步，需要重新添加一次才会拿到新版本。
 
-**方式二：从 GitHub 源码安装**
+**两种方式可以互相切换**
+
+| 你现在的状态 | 想换成 | 怎么做 |
+| --- | --- | --- |
+| 链接安装（快照） | 一键脚本（可跟随更新） | 跑一次 `一键安装.bat`，junction 会替换掉快照 |
+| 一键脚本（junction） | 链接安装 | 在客户端重新添加链接即可 |
+| 任一方式 | 修复坏掉的配置 | 跑一次 `一键安装.bat` 就能自愈 |
+
+> 一键脚本每次运行都会先备份 `~/.dsh/profiles/desktop/package.json`，
+> 然后重建两条链接、重写注册项，最后回读校验；即使之前的配置文件被写坏
+> （比如带 BOM 导致 DSH 起不来）也能修好。
+
+**手动方式（命令行）**
 
 ```sh
-dsh plugin --profile desktop add github:XDTrees/dsh-workbuddy-xdpool
-```
+# 从 GitHub 直接装
+dsh plugin --profile desktop add github:Clint-Lee/DSH-Workbuddy-Purge
 
-**方式三：手动注册 bundle**
-
-```sh
-# 1) 先装包（npm 或 GitHub 任选）
-dsh plugin --profile desktop add dsh-workbuddy-xdpool
-
-# 2) 注册 bundle：编辑 ~/.dsh/profiles/desktop/package.json，
-#    在 "dsh" → "profile" → "bundles" 数组末尾加上 "dsh-workbuddy-xdpool"
-
-# 3) 重启 DSH Desktop
+# 或者装完包后手动把 bundle 加进 ~/.dsh/profiles/desktop/package.json 的
+# "dsh" → "profile" → "bundles" 数组
 ```
 
 **本地构建（开发者）**
@@ -154,16 +167,22 @@ dsh plugin --profile desktop add dsh-workbuddy-xdpool
 ```sh
 pnpm install
 pnpm build              # 产出 lib/index.js + lib/index.d.ts + lib/bin.js + lib/client.js
-pnpm test               # 138 项测试
-pnpm typecheck          # 宿主侧类型检查
-pnpm typecheck:client   # 客户端类型检查
+pnpm test
+pnpm typecheck
+pnpm typecheck:client
 ```
 
-> **构建产物已随仓库提交**（`lib/` 不在 gitignore 里），所以从 GitHub 装不需要任何安装期脚本，也不会弹 pnpm 那句「构建脚本被拦截，请放行」。**改了 `src/` 记得重新 `pnpm build` 并把 `lib/` 一起提交**，否则用户拿到的是旧产物。
+> **构建产物已随仓库提交**（`lib/` 不在 gitignore 里），所以从 GitHub 装不需要
+> 任何安装期脚本，也不会弹 pnpm 那句「构建脚本被拦截」。**改了 `src/` 记得重新
+> `pnpm build` 并把 `lib/` 一起提交**，否则用户拿到的是旧产物。
 
-> 注意：`pnpm install` 要用 pnpm 11（`npx pnpm@11`），必要时加 `--config.confirmModulesPurge=false --config.minimumReleaseAge=0`——pnpm 11 默认的 `minimumReleaseAge` 供应链年龄策略会拦下刚发布的 rc 包。
+> 注意：`pnpm install` 要用 pnpm 11（`npx pnpm@11`），必要时加
+> `--config.confirmModulesPurge=false --config.minimumReleaseAge=0`。
 
-装完以后：模型选择器里会出现 **WorkBuddy 积分池** 分组；打开设置面板（左下角齿轮或 `Ctrl+Alt+,`）切到 **WorkBuddy 积分池** 一栏，能看到池健康（左侧状态脊的颜色就是健康态）、各账号的令牌 / 积分包 / 签到 / 冷却状态，还有「重新检测账号」「刷新积分」按钮和每个账号的签到按钮。
+装完以后：模型选择器里会出现 **WorkBuddy 积分池** 分组；打开设置面板
+（左下角齿轮或 `Ctrl+Alt+,`）切到 **WorkBuddy 积分池** 一栏，能看到池健康
+（左侧状态脊的颜色就是健康态）、各账号的令牌 / 积分包 / 签到 / 冷却状态，
+还有「重新检测账号」「刷新积分」按钮和每个账号的签到按钮。
 
 Web / TUI profile 也能用（`--profile web` / `--profile dsh-tui`）。
 

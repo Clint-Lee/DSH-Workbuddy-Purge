@@ -2,7 +2,7 @@
   "name": "dsh-workbuddy-xdpool",
   "displayName": "DSH WorkBuddy XD Pool",
   "description": "Merge every locally signed-in WorkBuddy account into DeepSeek Harness as one auto-failing-over model pool (multi-account rotation, live credits, daily check-in and model catalog).",
-  "version": "1.9.7",
+  "version": "1.9.8",
   "license": "MIT",
   "author": "XDTrees",
   "homepage": "https://github.com/XDTrees/dsh-workbuddy-xdpool#readme",
@@ -56,7 +56,9 @@
     "README.en.md",
     "CHANNEL-VERIFICATION.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "install.ps1",
+    "一键安装.bat"
   ],
   "scripts": {
     "build": "tsdown",
