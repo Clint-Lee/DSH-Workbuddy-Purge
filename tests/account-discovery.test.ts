@@ -156,3 +156,55 @@ describe('the pool still works with only good files', () => {
     expect(p.skippedFilesInOrder()).toHaveLength(0)
   })
 })
+
+/**
+ * A credential for `name` whose REFRESH window has already closed.
+ *
+ * This is what the desktop app leaves behind after a re-sign-in: the auth
+ * directory is append-only, so yesterday's snapshot stays next to today's. Its
+ * refresh window closed, so it cannot be revived — but the account itself is
+ * perfectly alive, because the new file for the same `uin` is right there.
+ */
+function staleCredential(name: string): string {
+  return JSON.stringify({
+    auth: {
+      accessToken: `token-old-${name}`,
+      refreshToken: 'refresh-old',
+      expiresAt: Date.now() - 86_400_000,
+      refreshExpiresAt: Date.now() - 3_600_000,
+      domain: 'www.workbuddy.cn',
+    },
+    account: { uid: `uid-${name}`, uin: `uin-${name}`, nickname: name },
+  })
+}
+
+describe('a superseded snapshot is not a warning', () => {
+  it('stays quiet when the same account loaded from a newer file', async () => {
+    // The reported symptom: two accounts both freshly signed in, yet the card
+    // showed "1 credential file could not be read — sign-in expired". The dead
+    // file was the SAME account's previous snapshot; the account was loaded and
+    // serving. A warning the user cannot act on is worse than no warning.
+    const dir = mkdtempSync(join(tmpdir(), 'wbpool-stale-'))
+    writeFileSync(join(dir, 'workbuddy-desktop.z-old.info'), staleCredential('same'))
+    writeFileSync(join(dir, 'workbuddy-desktop.a-new.info'), plainCredential('same'))
+    const p = pool(dir)
+    const accounts = await p.scan()
+    expect(accounts).toHaveLength(1)
+    expect(p.skippedFilesInOrder()).toHaveLength(0)
+  })
+
+  it('still reports a dead file whose account is nowhere else', async () => {
+    // The opposite error would be hiding a real loss: an account that exists
+    // ONLY as an expired snapshots cannot serve, and the user must be told.
+    const dir = mkdtempSync(join(tmpdir(), 'wbpool-stale-only-'))
+    writeFileSync(join(dir, 'workbuddy-desktop.a-new.info'), plainCredential('alive'))
+    writeFileSync(join(dir, 'workbuddy-desktop.z-dead.info'), staleCredential('gone'))
+    const p = pool(dir)
+    const accounts = await p.scan()
+    expect(accounts).toHaveLength(1)
+    const skipped = p.skippedFilesInOrder()
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0]?.reason).toBe('expiredRefresh')
+    expect(skipped[0]?.refreshExpiredAtMs).toBeTypeOf('number')
+  })
+})

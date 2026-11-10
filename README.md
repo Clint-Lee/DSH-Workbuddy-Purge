@@ -129,7 +129,7 @@
 
 **方式 A：一键脚本（推荐，适合不熟悉命令行的）**
 
-下载 [dist/DSH-Workbuddy-Purge-v1.9.13.zip](dist/DSH-Workbuddy-Purge-v1.9.13.zip)，
+下载 [dist/DSH-Workbuddy-Purge-v1.9.14.zip](dist/DSH-Workbuddy-Purge-v1.9.14.zip)，
 解压到任意位置，双击 **`一键安装.bat`**，然后完全退出 DSH 再打开。
 
 脚本会建立 junction 链接指向解压目录，所以**以后这个目录不要删除或移动**；
@@ -308,6 +308,8 @@ workbuddy-xdpool:
 - **`Expert_team_use_3` 偶发卡在 2/3**：有个号当天用掉两次专家团后，第三次怎么发都不涨（换个没用过的专家团也不涨）。怀疑该任务对单账号有当日额度、跨天恢复，但没验证。**新号不受影响**（实测 0/3 → 3/3）。
 
 - **依赖 WorkBuddy 客户端接口**（不是官方开放 API），WorkBuddy 更新后插件可能得跟着调。某个账号的 refresh token 失效时，回桌面重新登录即可。
+
+- **桌面端的 `auth` 目录是只追加的**，同一个账号在磁盘上会有好几份历史快照。插件只把「这个账号没有从任何文件里读到」的文件列为警告；旧快照 refresh 窗口关闭后自动忽略，不会因为你重新登录过而提示「登录已过期」。
 
 - 如果 Windows 和 Linux 用户名不同、且 Windows 环境变量没传进 WSL，请用 `WORKBUDDY_AUTH_FILE` 或配置里的 `authFile` 指定实际位置。
 

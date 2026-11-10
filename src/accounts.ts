@@ -997,12 +997,34 @@ export class WorkBuddyAccountPool {
         found.push(credential)
       }
     }
-    this.skippedFiles = skipped
-    if (skipped.length > 0) {
+    // Only report a skipped file when it is the ONLY copy of that account.
+    //
+    // The auth directory is append-only: the desktop app leaves every historical
+    // snapshot behind, so after a single re-sign-in the same account is on disk
+    // several times over — an old file whose refresh window has closed, plus the
+    // fresh one that just replaced it. Counting the dead snapshot as "a
+    // credential that could not be read" told the user their sign-in had expired
+    // while that very account was loaded and working, which is worse than saying
+    // nothing: the warning is about accounts they cannot use.
+    //
+    // So: an entry whose account id is already loaded from another file is a
+    // superseded snapshot, not a problem. An entry whose id is NOT loaded still
+    // reports, because that account really is missing from the pool.
+    const loadedIds = new Set(found.map(credential => workbuddyAccountId(credential)))
+    const relevant: WorkBuddySkippedFile[] = []
+    for (const entry of skipped) {
+      const overshadows = loadedIds.size > 0
+        ? await cheapIdentityIdFromFile(entry.path)
+        : undefined
+      if (overshadows !== undefined && loadedIds.has(overshadows)) continue
+      relevant.push(entry)
+    }
+    this.skippedFiles = relevant
+    if (relevant.length > 0) {
       this.logger?.warn?.(
-        `dsh-workbuddy-xdpool: ${skipped.length} credential file(s) could not be read; `
+        `dsh-workbuddy-xdpool: ${relevant.length} credential file(s) could not be read; `
         + `${found.length} account(s) still loaded. Reasons: `
-        + [...new Set(skipped.map(s => s.reason))].join('; '),
+        + [...new Set(relevant.map(s => s.reason))].join('; '),
       )
     }
 
