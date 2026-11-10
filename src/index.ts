@@ -38,6 +38,7 @@ import {
 } from './ignored.ts'
 
 import { fileURLToPath } from 'node:url'
+import { ensurePurgeGuard } from './purge-guard.ts'
 
 /**
  * This plugin's install root, the tree its own provider is assembled from.
@@ -527,6 +528,17 @@ function warnOnPiAiGenerationMismatch(ctx: Context): void {
  */
 export function apply(ctx: Context, config: Config = {}): void {
   const core = createCore(ctx.logger)
+
+  // Re-create the dsh-purge scope guard before anything reads the client-bundle
+  // table. Reason: this package mounts purge through relative Loader names, and
+  // purge's own auto-updater replaces its whole `lib/` directory — which deletes
+  // the guard and makes four Loader rows claim the same package name. See
+  // purge-guard.ts for the full chain; it is synchronous, non-throwing, and
+  // writes nothing when the guard is already correct.
+  ensurePurgeGuard((message, error) => {
+    if (error === undefined) ctx.logger.warn(message)
+    else ctx.logger.warn(message, error)
+  })
 
   // Cross-generation guard, checked ONCE at load.
   //

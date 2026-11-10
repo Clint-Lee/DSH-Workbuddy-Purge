@@ -113,6 +113,12 @@
 
 ## 安装
 
+> **一个包，两份能力。** 积分池（WorkBuddy 积分自动领）和破甲（purge / 红队）已经合并进这一个仓库。粘一条 GitHub 链接装完就都有，跟下载 zip 跑一键脚本的效果完全一致 —— 不需要再单独装 `dsh-purge`。
+>
+> 合并是靠根 `cordis.patch.yml` 用相对路径把 purge 的四条 Loader 行挂进来做的（`./packages/dsh-purge/lib/index.js` 及三条 redteam），加载时会按 patch 文件所在目录锚定成绝对 `file:` URL，换机器、换解压路径都不用改。细节和踩过的坑写在 [CHANGELOG 的 1.9.10](CHANGELOG.md)。
+>
+> **从旧版升上来的话**：如果 profile 里还留着独立的 `dsh-purge` bundle，请把它删掉（一键脚本会自动摘）。同一个包名挂两条 Loader 行会让 purge 的前端整个不加载。
+
 前置条件：装好 WorkBuddy 桌面 App 并登录（插件复用它存在本机的登录状态）。多账号 = 在桌面 App 里换着登几次，每次登录都会被自动吸进池里。
 
 > 兼容 host `0.1.1-rc.2` 起的整个 0.1.x 系列，以及 `0.2.0-rc.2`。安装设置节时会按 host 能力自动选择 `settings.installSection`（0.1.2-rc.1+）或更早的自由函数写法；卡片在 0.2.0 上作为设置面板里一个**平级标签页**渲染。
@@ -123,7 +129,7 @@
 
 **方式 A：一键脚本（推荐，适合不熟悉命令行的）**
 
-下载 [dist/DSH-Workbuddy-Purge-v1.9.9.zip](dist/DSH-Workbuddy-Purge-v1.9.9.zip)，
+下载 [dist/DSH-Workbuddy-Purge-v1.9.10.zip](dist/DSH-Workbuddy-Purge-v1.9.10.zip)，
 解压到任意位置，双击 **`一键安装.bat`**，然后完全退出 DSH 再打开。
 
 脚本会建立 junction 链接指向解压目录，所以**以后这个目录不要删除或移动**；
@@ -139,6 +145,10 @@ https://github.com/Clint-Lee/DSH-Workbuddy-Purge
 
 DSH 会用 pnpm 把仓库作为包安装进来。**这种方式装的是快照**，仓库之后
 再有更新不会自动同步，需要重新添加一次才会拿到新版本。
+
+这种方式装出来的就是完整功能（积分池 + 破甲），因为 purge 的文件本来就
+在仓库里（`packages/dsh-purge/`），挂载关系由本包自己的 `cordis.patch.yml`
+负责。装完同样需要**完全退出 DSH 再打开**。
 
 **两种方式可以互相切换**
 

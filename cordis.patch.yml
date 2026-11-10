@@ -1,12 +1,103 @@
-# DSH WorkBuddy XD Pool bundle patch
+# DSH WorkBuddy Purge bundle patch
 #
-# 本包只负责模型池：注册 provider `workbuddy-xdpool`，把本机已登录的 WorkBuddy
-# 账号合成一个自动切换的池。提示清洗 / 破甲 / 演练台由同仓库的
-# `packages/dsh-purge` 提供（安装为 `dsh-purge`），两者各自维护自己的 patch，
-# 互不覆盖对方条目。
+# 一个 bundle，两套能力：
+#   * 模型池 —— 注册 provider `llm-workbuddy-xdpool`，把本机已登录的 WorkBuddy
+#     账号合成一个自动切换的池。
+#   * 提示清洗 / 破甲 / 演练台 —— 由同仓库的 `packages/dsh-purge` 提供，以相对
+#     路径的 Loader 行挂进来（不是第二个 npm 包）。
 #
-# 之所以不把 purge 的条目写进这里：DSH 校验 patch 条目的 `name` 必须与目标条目
-# 同名，`dsh-workbuddy-xdpool/purge` 这种子路径名会被判 mismatch 并跳过。
+# 为什么以前拆成两个包、现在能合：
+#
+# 1) DSH 只在「override 补丁」上校验 `name` 必须与目标条目同名
+#    （dsh-app-boot `applyEntryPatches`：不匹配就 warn `patch: name mismatch`
+#    并跳过）。`- insert:` 不带 `id` 时是 `data.push(...insert)`，**不做任何
+#    name 校验**。所以用 insert 追加子目录里的插件是合法的。
+#
+# 2) insert 里的 `name` 若写成相对路径（`./...` / `../...`），dsh-app-boot 的
+#    `anchorInsertedPluginNames` 会把它按 patch 文件所在目录解析成 file: URL。
+#    于是 `./packages/dsh-purge/lib/index.js` 无论本包被 junction 链接、还是被
+#    pnpm 装成 github 快照，都能指到同一份文件。
+#
+# 3) purge 的前端靠 dsh-client-modules 的 `resolveMeta` 发现：loaderName 是
+#    路径时 `expectedPackageName` 为 undefined，`nearestPackage` 沿目录向上
+#    找到 `packages/dsh-purge/package.json`，读它的 `dsh.client` 与
+#    `exports["./client"]`，于是 `client.js` 照常注入。不需要第二个 bundle。
+#
+# 4) purge 的运行时 import 只有 `node:*` 和相对路径（SQLite 用 Node 内置的
+#    `node:sqlite`），没有第三方依赖，所以不装成包也能跑。
+#
+# ⚠️ 一个包名只能有一条 Loader 行：dsh-client-modules 的 `reconcilePackage`
+# 遇到同一 packageName 来自多个 Loader source 会直接抛
+# `resolves from multiple active Loader sources`。因此**不能**再同时把
+# `dsh-purge` 作为独立 bundle 启用（旧装法）；install.ps1 负责把它从
+# profile 的 `dsh.profile.bundles` 里移除。
+
+# ── 关掉旧的独立红队包行（若用户以前装过 dsh-redteam-mode）─────────────
+# 这些 id 在纯净安装里不存在，只会在启动日志里各留一条 warn，不影响启动。
+- id: redteam-store
+  name: dsh-redteam-store
+  disabled: true
+
+- id: redteam-ui
+  name: dsh-redteam-ui
+  disabled: true
+
+- id: redteam-mode
+  name: dsh-redteam-mode
+  disabled: true
+
+- id: redteam-mode-store
+  name: dsh-redteam-mode/store
+  disabled: true
+
+- id: redteam-mode-ui
+  name: dsh-redteam-mode/ui
+  disabled: true
+
+# ── 破甲：去掉宿主自带人格，只留工作目录一行 ──────────────────────────
+- id: system-prompt
+  config:
+    includeHarnessIdentity: false
+    personaPrefix: ""
+    personaSuffix: Your working directory is {{cwd}}.
+
 - insert:
+    # ── 模型池 ────────────────────────────────────────────────────────
     - id: llm-workbuddy-xdpool
       name: dsh-workbuddy-xdpool
+
+    # ── 破甲主插件（提示清洗 / 注入 / 破甲状态）──────────────────────
+    - id: dsh-purge
+      name: ./packages/dsh-purge/lib/index.js
+      inject: [systemPrompt, tools]
+      config:
+        enabled: true
+        autoApplyOnStart: false
+        autoUpdateOnStart: false
+        autoRevertOnMissing: false
+        injectOnce: false
+        stripMnemon: true
+        verbose: false
+        postPrompt: ""
+        postPromptOrder: 5100
+        autoRetry: true
+        retryMax: 3
+        autoContinue: false
+        continueMax: 3
+        continueText: "继续"
+        capabilityProtocol: true
+        hooksDenyBypass: true
+
+    # ── 演练台：预设 + 技能落地 ──────────────────────────────────────
+    - id: dsh-purge-redteam
+      name: ./packages/dsh-purge/lib/redteam/index.js
+
+    # ── 演练台事实库（SQLite），数据在 $DSH_HOME/redteam ──────────────
+    - id: dsh-purge-redteam-store
+      name: ./packages/dsh-purge/lib/redteam/store.js
+      config:
+        root: !!js dshHomePath('redteam')
+
+    # ── 演练台 HTTP 桥 POST /redteam/api ────────────────────────────
+    - id: dsh-purge-redteam-ui
+      name: ./packages/dsh-purge/lib/redteam/ui.js

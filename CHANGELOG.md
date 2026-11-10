@@ -4,6 +4,31 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 1.9.10 — 一个包，一条链接：purge 并进来了
+
+以前要装两个插件才有完整能力：`dsh-workbuddy-xdpool`（积分池）+ `dsh-purge`（破甲）。从 DSH 客户端粘 GitHub 链接安装时，pnpm 只装**一个**包，所以粘链接的人一向只有积分池、没有破甲 —— 而 zip 一键脚本会同时建两条 junction，两边能力不一样。
+
+现在根 `cordis.patch.yml` 自己把 purge 挂进来了：五条 Loader 行（`dsh-purge` + 三条 redteam）以**相对路径**指向 `./packages/dsh-purge/…`，被 `anchorInsertedPluginNames` 转成 `file:` URL。粘一条链接装完，purge 的面板、红队、破甲规则全都在。
+
+### 为什么这样能行（三条机制，都实测过）
+
+- **`insert` 不校验 `name`**：`applyEntryPatches` 只在 override 补丁里比对 `name`，`- insert:` 不带 `id` 时无条件追加。所以可以在本包的 patch 里塞别人的条目。
+- **相对 `name` 自动锚定**：patch 文件里写 `./packages/…`，加载时按 patch 文件所在目录解析成绝对 `file:` URL，换机器、换解压路径都不用改。
+- **前端靠 `package.json` 发现**：`dsh-client-modules` 从 Loader 行的文件往上找最近的 `package.json`，读它的 `dsh.client` 和 `exports["./client"]`。`lib/index.js` 往上就找到 `packages/dsh-purge/package.json`，purge 的前端因此被正确挂载。
+
+### 顺带修掉的坑：同一个包名不能挂两条 Loader 行
+
+三条 redteam 行的相对路径也会往上找到同一个 `packages/dsh-purge/package.json`，于是四条行都报 `packageName: dsh-purge`，`reconcilePackage` 直接抛 `resolves from multiple active Loader sources`，整个 purge 前端不加载（界面看起来就是「破甲面板没了」，而且没有任何报错弹窗）。
+
+解法是给 `packages/dsh-purge/lib/redteam/` 放一个 `package.json` 哨兵：只声明 `name`/`type`，**不含** `dsh`、`dsh.client`、`exports`、`main`。三条 redteam 行因此解析到这个哨兵，`resolveMeta()` 返回 `null`，它们照常作为 Loader 行加载但不再抢前端归属。
+
+**这个哨兵会被 purge 自己的自动更新删掉** —— `lib/update.js` 的 `COPY_NAMES` 里有 `"lib"`，覆盖方式是 `rm -rf lib` 再拷。所以每次宿主启动都会检查一次，缺了就补回来（`src/purge-guard.ts`，写失败只 warn，绝不阻断启动）。
+
+### 迁移
+
+- **一键脚本**：重跑即可，它会建 `dsh-purge` 的 junction（兼容旧装法），但把它从 `dsh.profile.bundles` 里摘掉并校验摘干净了 —— 同时启用两条会撞上面那个多源冲突。
+- **粘链接装过旧版的**：先 remove 再 add（DSH 不允许对同一链接重复安装）。
+- **手上有旧 profile 的**：把 `dsh-purge` 从 `dependencies` 和 `dsh.profile.bundles` 里去掉，purge 的 patch 条目也不用再在 profile 的 `cordis.patch.yml` 里重复写。
 ## 1.9.9 — 账号「隔天就没了」：自动化会刷新令牌了，刷新的结果也存盘了
 
 > 症状：第一天两个号都能自动跑完；第二天只剩一个；在 WorkBuddy 里重新登一次那个号，又好了；第三天又只剩一个。令牌到期时间明明写着下个月初。

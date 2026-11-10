@@ -214,17 +214,31 @@ $deps['dsh-purge']            = 'file:../../plugins/dsh-purge'
 # then ours. Existing entries are kept (so another plugin's entry is not silently
 # dropped), but the result is normalised instead of appending to whatever order
 # the previous version of this script happened to leave behind.
+#
+# 1.9.10 起 `dsh-purge` 不再是独立 bundle：purge 的四条 Loader 行由本包自己的
+# cordis.patch.yml 以相对路径 insert 进来。两条同时启用会让 dsh-client-modules
+# 的 reconcilePackage 发现同一个 packageName 来自两个 Loader source，直接抛
+# "resolves from multiple active Loader sources"，整个前端插件表都装不起来。
+# 所以这里必须显式把历史遗留的 dsh-purge 条目从 bundles 里摘掉。
 $existingBundles = @()
 try { $existingBundles = @($profileObj.dsh.profile.bundles) } catch { }
+$retiredBundles = @('dsh-purge')
 $seen    = New-Object System.Collections.Generic.HashSet[string]
 $bundles = New-Object System.Collections.Generic.List[string]
-foreach ($b in @('@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-purge', 'dsh-workbuddy-xdpool')) {
+foreach ($b in @('@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-workbuddy-xdpool')) {
     if ($seen.Add($b)) { $bundles.Add($b) }
 }
-# Anything else the profile already had keeps its relative order at the end.
+# Anything else the profile already had keeps its relative order at the end,
+# except the retired standalone purge bundle.
+$dropped = 0
 foreach ($b in $existingBundles) {
     $name = [string]$b
-    if ($name -and $seen.Add($name)) { $bundles.Add($name) }
+    if (-not $name) { continue }
+    if ($retiredBundles -contains $name) { $dropped += 1; continue }
+    if ($seen.Add($name)) { $bundles.Add($name) }
+}
+if ($dropped -gt 0) {
+    Write-Ok "已把旧的独立 dsh-purge bundle 从 profile 里摘除（能力已并入本包）"
 }
 
 $out = [ordered]@{
@@ -247,7 +261,7 @@ try {
     $check = $verifyRaw | ConvertFrom-Json
     $okBundles = @($check.dsh.profile.bundles)
     if ($okBundles -notcontains 'dsh-workbuddy-xdpool') { throw 'bundles 缺少 dsh-workbuddy-xdpool' }
-    if ($okBundles -notcontains 'dsh-purge')            { throw 'bundles 缺少 dsh-purge' }
+    if ($okBundles -contains 'dsh-purge') { throw 'bundles 里仍有旧版独立 dsh-purge 条目，会与合并后的本包冲突' }
     Write-Ok "配置已写入并校验通过（无 BOM，bundles 共 $($okBundles.Count) 项）"
 } catch {
     Write-Err "配置校验失败：$($_.Exception.Message)"
@@ -257,6 +271,65 @@ try {
 }
 
 Write-Host ""
+# --- 清理 profile 里历史遗留的独立 dsh-purge patch 条目 ---
+# 1.9.10 之前 purge 是独立 bundle，它的加载器条目由 profile 自己的 cordis.patch.yml
+# 提供（一个 `- insert:` 下面挂着 `- id: dsh-purge` / `name: dsh-purge`）。现在这些
+# 条目由本包的 cordis.patch.yml 提供；profile 那份要是留着，同一个 packageName 就有
+# 两个 Loader source，dsh-client-modules 的 reconcilePackage 会抛
+# "resolves from multiple active Loader sources"，结果是 purge 前端整个不加载
+# —— 用户看到的就是「破甲面板没了」，而且没有任何报错弹窗。
+#
+# 只摘「id 和 name 都是 dsh-purge」的那一个子条目，同一 insert 块里的其他条目
+# （用户自己写的、别的插件的）一律保留；块被摘空时才连 `- insert:` 行一起去掉。
+$profilePatchPath = Join-Path $desktopProfile 'cordis.patch.yml'
+if (Test-Path -LiteralPath $profilePatchPath) {
+    $patchRaw   = [System.IO.File]::ReadAllText($profilePatchPath, [System.Text.Encoding]::UTF8)
+    $patchNl    = if ($patchRaw -match "`r`n") { "`r`n" } else { "`n" }
+    $patchLines = [System.Collections.ArrayList]@($patchRaw -split "`r?`n")
+    $removed = 0
+    for ($i = $patchLines.Count - 1; $i -ge 0; $i--) {
+        if ($patchLines[$i] -notmatch '^-\s*insert\s*:\s*$') { continue }
+        # insert 块到「第一个非空且不缩进的行」前一行结束 —— 子项一定有缩进。
+        $blockEnd = $patchLines.Count - 1
+        for ($j = $i + 1; $j -lt $patchLines.Count; $j++) {
+            if ($patchLines[$j].Trim().Length -eq 0) { continue }
+            if ($patchLines[$j] -match '^\s') { continue }
+            $blockEnd = $j - 1
+            break
+        }
+        # 子条目起点：缩进比 insert 行更深的 `- ` 行。
+        $childStarts = New-Object System.Collections.Generic.List[int]
+        for ($j = $i + 1; $j -le $blockEnd; $j++) {
+            if ($patchLines[$j] -match '^\s+-\s') { $childStarts.Add($j) }
+        }
+        $dropStart = -1; $dropEnd = -1
+        for ($c = 0; $c -lt $childStarts.Count; $c++) {
+            $from = $childStarts[$c]
+            $to   = if ($c + 1 -lt $childStarts.Count) { $childStarts[$c + 1] - 1 } else { $blockEnd }
+            $sub  = ($patchLines[$from..$to] -join "`n")
+            if ($sub -notmatch '(?m)^\s*(?:-\s+)?id:\s*dsh-purge\s*$') { continue }
+            if ($sub -notmatch '(?m)^\s*(?:-\s+)?name:\s*dsh-purge\s*$') { continue }
+            $dropStart = $from; $dropEnd = $to
+            break
+        }
+        if ($dropStart -lt 0) { continue }
+        $patchLines.RemoveRange($dropStart, $dropEnd - $dropStart + 1)
+        $removed += 1
+        # 块里再没有子条目了，把 `- insert:` 这行也去掉。
+        $stillHasChild = $false
+        for ($j = $i + 1; $j -le $blockEnd; $j++) {
+            if ($patchLines[$j] -match '^\s+-\s') { $stillHasChild = $true; break }
+        }
+        if (-not $stillHasChild) { $patchLines.RemoveAt($i) }
+    }
+    if ($removed -gt 0) {
+        $patchBak = "$profilePatchPath.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        Copy-Item -LiteralPath $profilePatchPath -Destination $patchBak -Force
+        Write-Utf8NoBom $profilePatchPath ($patchLines -join $patchNl)
+        Write-Ok "已从 profile 的 cordis.patch.yml 摘除 $($removed) 条旧的 dsh-purge insert 条目（原件已备份）"
+    }
+}
+
 Write-Step "3/3 检查 DSH 是否正在运行"
 $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like '*DeepSeek*Harness*' })
 if ($running.Count -gt 0) {

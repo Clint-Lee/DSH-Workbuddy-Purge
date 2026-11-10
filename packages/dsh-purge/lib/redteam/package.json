@@ -1,0 +1,7 @@
+{
+  "name": "dsh-purge-redteam-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SCOPE GUARD for the DSH client-bundle resolver. This file exists ONLY to stop dsh-client-modules from attributing the three redteam Loader rows (redteam/index.js, redteam/store.js, redteam/ui.js) to the dsh-purge package manifest one directory up. If they did resolve there, all four rows would report packageName 'dsh-purge' and reconcilePackage would throw 'resolves from multiple active Loader sources', which drops the whole dsh-purge client bundle. This manifest deliberately declares no dsh / dsh.client field, so resolveMeta() returns null and the rows are skipped by the client-bundle table while still loading normally as Loader rows. It must also stay free of an 'exports' field, or the file: URL imports would be remapped."
+}
