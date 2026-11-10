@@ -58,7 +58,7 @@
     "CHANGELOG.md",
     "LICENSE",
     "install.ps1",
-    "涓€閿畨瑁?bat"
+    "一键安装.bat"
   ],
   "scripts": {
     "build": "tsdown",
