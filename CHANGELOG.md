@@ -1,3 +1,54 @@
+## 1.9.15 — 默认推荐链接安装：一个包，装完自己就能查更新
+
+这一版没有改代码逻辑，改的是**别人该怎么装、装完怎么更新**这件事的说法 ——
+因为之前 README 把「一键脚本」写成推荐方式，而实际上链接安装早就能拿到完整能力了，
+而且更新按钮在链接安装的快照上已经实测可用（1.9.13 修的那条路）。
+
+### 安装章节整体重排
+
+「方式 A：在 DSH 客户端里粘贴仓库链接」升为第一推荐，「方式 B：一键脚本」降为第二。
+
+链接安装的具体说明：
+
+1. 设置 → 插件 → 添加插件，粘贴 `https://github.com/Clint-Lee/DSH-Workbuddy-Purge`
+2. **完全退出 DSH 再打开**（桌面宿主没有 hmr，插件安装永远是 `restart-required`）
+3. 积分池和破甲同时到位 —— purge 的文件本来就在仓库里（`packages/dsh-purge/`），
+   挂载关系由本包自己的 `cordis.patch.yml` 负责，不需要再单独装一次 `dsh-purge`
+4. 以后更新不用再碰链接：聊天顶栏点 **WorkBuddy 积分池** → 检查更新 → 立即更新
+
+> DSH 的插件管理器本身没有更新功能 —— `@deepseek-ai/dsh-plugin-manager` 只有
+> `runPnpm(["add", ...])` 和 `runPnpm(["remove", ...])`，重复粘同一条链接会因为
+> lockfile 已钉住 commit 而判定「没有变更」并抛 `ambiguous-install`。
+> 所以顶栏那个按钮是链接安装唯一的更新入口，这也是为什么值得把它说清楚。
+
+### 链接安装的更新路径是怎么走的
+
+`installKind` 看安装目录里有没有 `.git`：
+
+- **有 `.git`**（一键脚本的 junction 指向 git 工作副本）→ `git pull --ff-only origin main`
+- **没有 `.git`**（pnpm 快照，链接安装）→ 从 `codeload.github.com` 下 tarball，
+  校验 5 个必需文件都在 → 旧 `lib` / `packages` / `assets` 和 8 个单文件 `rename` 进
+  `update-backup-<时间戳>/` → 拷回新的。只保留最近 2 份备份。
+
+第二条路就是 1.9.13 修的那条（原来用外部 `tar`，被 `一键安装.bat` 的中文名卡住整包失败）。
+
+### 实测
+
+真实链接安装快照（1.9.10，无 `.git`）走完整流程：
+
+```
+before: 1.9.10
+check : latestVersion 1.9.14, upToDate false
+apply : mode overlay, from 1.9.10 → to 1.9.14, restartRequired true
+after : 1.9.14
+```
+
+更新后 `node_modules` 幸存、`lib/index.js`、`lib/client.js`、`cordis.patch.yml`、
+`一键安装.bat`、`packages/dsh-purge/lib/index.js`、`redteam/package.json`、
+`client.js` 全部在位；备份目录里是更新前的 11 项。
+
+---
+
 ## 1.9.14 — 「有 1 个凭据文件读不出来」其实是误报
 
 截图里那行琥珀色警告，说的是一个**已经加载成功的账号**。用户两个号都刚重新登录过，却被告知
