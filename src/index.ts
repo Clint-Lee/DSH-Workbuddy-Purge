@@ -39,6 +39,8 @@ import {
 
 import { fileURLToPath } from 'node:url'
 import { ensurePurgeGuard } from './purge-guard.ts'
+import { registerUpdateRoutes } from './update-routes.ts'
+import { readInstalledVersion } from './update-source.ts'
 
 /**
  * This plugin's install root, the tree its own provider is assembled from.
@@ -1014,6 +1016,20 @@ function canonicalJson(value: unknown): string {
       const result = await seedCatalog()
       invalidateCatalog()
       return result
+    },
+  }))
+
+  // About + self-update routes for the in-conversation tab chip.
+  //
+  // Separate `inject` from the pool routes above so a host whose webServer
+  // arrives at a different moment still gets each half independently: the chip
+  // must be able to say what it is even when the pool has no accounts.
+  ctx.inject(['webServer'], (webCtx) => registerUpdateRoutes(webCtx, {
+    pluginRoot: PLUGIN_ROOT,
+    currentVersion: readInstalledVersion(PLUGIN_ROOT),
+    warn: (message, error) => {
+      if (error === undefined) ctx.logger.warn(message)
+      else ctx.logger.warn(message, error)
     },
   }))
   api = {

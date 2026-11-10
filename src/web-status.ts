@@ -146,14 +146,14 @@ function safeMessage(error: unknown): string {
     .slice(0, 500)
 }
 
-function json(res: ServerResponse, status: number, body: unknown): void {
+export function json(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
   res.end(payload)
 }
 
 /** Loopback browser origins only; other devices are refused. */
-function loopbackOrigin(req: IncomingMessage): boolean {
+export function loopbackOrigin(req: IncomingMessage): boolean {
   const origin = req.headers.origin
   if (origin === undefined) return true
   try {

@@ -4,6 +4,32 @@
 
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 1.9.11 — 聊天顶栏的标签页，和它里面的更新按钮
+
+以前这个插件的入口只有一个：设置面板最右边那个标签页。但「已经装好之后，想确认自己是不是最新版」是个天天会发生的小事，而为了它跑一趟设置、再记住「链接安装要先卸载再重新粘一遍」是个反复收费的摩擦。
+
+这一版做了两件事：
+
+### 聊天主界面顶栏多了一个标签
+
+就是 `对话 / 上下文 / 编队` 那一排的最右边。跟 purge 的标签并排，样式复刻宿主自己的标签（13px / 500 / `padding: 0 0 9px`、行 gap 36px，所以不加水平内边距）。点它开一个弹框。
+
+### 弹框里是「这个插件是什么」+「检查更新 / 立即更新」
+
+- **是什么**：版本号、安装方式（仓库安装 / 链接安装）、以及本包内含的两个插件。
+- **检查更新**：读 `raw.githubusercontent.com` 上 `main` 分支的 `package.json` 取 `version`。**刻意不用 `api.github.com`** —— 未认证请求实测直接被限流成 403，用它等于给所有人做一个必定失败的按钮。弹框一打开就自动检查一次，因为打开它的动机本来就是「有没有新版」。
+- **立即更新**：两条路，按安装形态自动选：
+  - 有 `.git`（一键脚本 + `git clone`、或直接在本仓库里跑）→ `git pull --ff-only origin main`。用 `--ff-only` 是因为这是按按钮触发的无人值守操作，产生合并冲突会留下一棵用户看不见的树。
+  - 没有 `.git`（DSH 粘链接装出来的 pnpm 快照）→ 下载 `codeload.github.com/.../tar.gz/refs/heads/main`，解到临时目录，**先断言 `package.json` / `lib/index.js` / `cordis.patch.yml` / `packages/dsh-purge/lib/index.js` / `packages/dsh-purge/lib/redteam/package.json` 都在**，再把现有的 `lib`/`packages`/`assets` 和几个单文件 `rename` 进 `update-backup-<时间戳>/`，最后从暂存目录拷回来。下载或校验失败时磁盘上什么都没动；替换途中失败则备份目录就是回滚点。备份只留最新 2 份。
+
+更新完必须重启 DSH（宿主在启动时快照 client bundle，`restartRequired: true` 会明说）。
+
+这就是「DSH 自己不会自动更新插件」的补丁：宿主 `dsh-plugin-manager` 里没有 update 方法，设置页 UI 里 `update`/`更新` 一次都没出现；粘同一条链接连 `pnpm add` 都会因为 lockfile 钉死了 commit 而报 `ambiguous-install`。更新按钮把这套绕过去了。
+
+### 一个版本比较的坑
+
+`compareVersions` 必须按数字段比，不能按字符串：字符串序会认为 `1.9.9 > 1.9.10`，于是刚更新完就立刻又提示「有新版」。另外遇到第一个非数字段就停，否则 `1.9.9-rc.1` 会被解析成 `[1,9,9,0,1]` 而**高于** `1.9.9`，等于把预发布当成升级推送。
+
 ## 1.9.10 — 一个包，一条链接：purge 并进来了
 
 以前要装两个插件才有完整能力：`dsh-workbuddy-xdpool`（积分池）+ `dsh-purge`（破甲）。从 DSH 客户端粘 GitHub 链接安装时，pnpm 只装**一个**包，所以粘链接的人一向只有积分池、没有破甲 —— 而 zip 一键脚本会同时建两条 junction，两边能力不一样。

@@ -49,6 +49,67 @@ export const POOL_AUTOMATION_RUN_PATH = '/plugins/dsh-workbuddy-xdpool/automatio
 /** Set or clear one account's reserved-credit floor. */
 export const POOL_CREDIT_RESERVE_PATH = '/plugins/dsh-workbuddy-xdpool/accounts/credit-reserve'
 
+/**
+ * What this bundle is, for the in-conversation tab chip's dialog.
+ *
+ * Its own route rather than an extra field on the status document because the
+ * dialog must render something even when no WorkBuddy account exists yet — the
+ * status route answers that case with an empty pool, which says nothing about
+ * the plugin itself.
+ */
+export const POOL_ABOUT_PATH = '/plugins/dsh-workbuddy-xdpool/about'
+
+/** Ask GitHub for the newest published version. Read-only, GET. */
+export const POOL_UPDATE_CHECK_PATH = '/plugins/dsh-workbuddy-xdpool/update/check'
+
+/** Pull the newest published version in place. Mutating, POST. */
+export const POOL_UPDATE_APPLY_PATH = '/plugins/dsh-workbuddy-xdpool/update/apply'
+
+/** Static description of the installed bundle. */
+export interface PoolWebAbout {
+  /** Version from this install's own package.json. */
+  version: string
+  /** Where the bundle lives on disk. */
+  pluginRoot: string
+  /** `repo` for a real checkout, `snapshot` for a pnpm link install. */
+  installKind: 'repo' | 'snapshot'
+  /** Repository name the update routes track. */
+  repo: string
+  /** Branch the update routes track. */
+  branch: string
+  /**
+   * Names of the plugins this bundle mounts.
+   *
+   * Reported so the dialog can say what the user is actually getting — the
+   * bundle ships two plugins and that is not visible anywhere else.
+   */
+  includes: readonly string[]
+}
+
+/** Answer of the version check. */
+export interface PoolWebUpdateCheck {
+  ok: boolean
+  currentVersion: string
+  latestVersion?: string
+  upToDate?: boolean
+  checkedAt: string
+  error?: string
+}
+
+/** Answer of the apply action. */
+export interface PoolWebUpdateApply {
+  ok: boolean
+  fromVersion: string
+  toVersion?: string
+  /** `git` fast-forward, or `overlay` file replacement in a snapshot install. */
+  mode?: 'git' | 'overlay'
+  /** Set for `overlay`: where the previous tree was kept. */
+  backupDir?: string
+  /** The host caches client bundles, so every successful update ends here. */
+  restartRequired: boolean
+  error?: string
+}
+
 /** Body of the reserve route: exactly one account per request. */
 export interface PoolWebCreditReserve {
   /** Pool account id, as reported in `PoolWebAccount.id`. */

@@ -38,6 +38,7 @@ import { POOL_NAV_ICON_MASK_URL } from './nav-icon.ts'
 import type { PoolCardInjected } from './PoolCard.tsx'
 import { en, zh } from './locales.ts'
 import type { WorkBuddyPoolSettingsKey } from './locales.ts'
+import { mountUpdateChip } from './UpdateChip.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -146,6 +147,16 @@ export function apply(ctx: WorkBuddyClientContext): void {
     // artwork over the gear — the same technique dshmarket uses, and the only
     // route available to a third-party page.
     installNavIcon(ctx, () => t('row.navLabel'))
+
+    // The chip in the conversation tab strip, and the dialog it opens. Wrapped
+    // separately from the registration above: the tab row is host markup this
+    // bundle does not own, so if the host changes it the Settings page must
+    // still work. Only the chip disappears.
+    try {
+      ctx.effect(() => mountUpdateChip({ t }), 'dsh-workbuddy-xdpool: conversation tab chip')
+    } catch (error: unknown) {
+      console.error('[dsh-workbuddy-xdpool] the conversation tab chip could not be mounted:', error)
+    }
   } catch (error: unknown) {
     // Degrade silently on the page: the pool provider still serves models.
     // Developers see the full cause in the browser console; users see no banner.
