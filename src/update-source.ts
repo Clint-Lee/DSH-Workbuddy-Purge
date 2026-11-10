@@ -48,6 +48,53 @@ export const UPDATE_MANIFEST_URL = `https://raw.githubusercontent.com/${UPDATE_R
 export const UPDATE_TARBALL_URL = `https://codeload.github.com/${UPDATE_REPO}/tar.gz/refs/heads/${UPDATE_BRANCH}`
 
 /**
+ * Reverse proxies tried when GitHub is unreachable.
+ *
+ * `github.com`, `raw.githubusercontent.com` and `codeload.github.com` are
+ * routinely blocked or reset on mainland networks — the failure mode is a
+ * connection that hangs until the deadline, which the dialog would report as
+ * "check failed" even though the user is online. These mirrors take the whole
+ * GitHub URL as a path suffix, so a retry is a string concatenation.
+ *
+ * Order matters: the first one that answers wins, so put the fastest first.
+ * They are *only* a fallback — a direct request is always attempted first, so
+ * users who can reach GitHub never depend on a third party.
+ */
+export const UPDATE_MIRRORS = [
+  'https://gh-proxy.com/',
+  'https://ghproxy.net/',
+] as const
+
+/** Every URL to try, direct first, then each mirror prefix. */
+function mirrorUrls(url: string): string[] {
+  return [url, ...UPDATE_MIRRORS.map((prefix) => `${prefix}${url}`)]
+}
+
+/**
+ * `fetch` that walks the direct URL and then the mirrors.
+ *
+ * Returns the first non-`ok` response only if *every* candidate produced one,
+ * so a mirror returning 404 does not mask a direct 200 further down the list.
+ * Throws only when every candidate threw; the last error is the useful one.
+ */
+async function fetchWithMirrors(url: string): Promise<Response> {
+  const candidates = mirrorUrls(url)
+  let lastResponse: Response | undefined
+  let lastError: unknown
+  for (const candidate of candidates) {
+    try {
+      const response = await fetchWithTimeout(candidate)
+      if (response.ok) return response
+      lastResponse = response
+    } catch (error: unknown) {
+      lastError = error
+    }
+  }
+  if (lastResponse !== undefined) return lastResponse
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
+/**
  * Entries replaced wholesale by the overlay path.
  *
  * Directories are removed before copying; files are overwritten. Anything not
@@ -218,7 +265,7 @@ export async function checkForUpdate(pluginRoot: string): Promise<UpdateCheckRes
   const checkedAt = new Date().toISOString()
   const currentVersion = await readVersionFrom(join(pluginRoot, 'package.json'))
   try {
-    const response = await fetchWithTimeout(UPDATE_MANIFEST_URL)
+    const response = await fetchWithMirrors(UPDATE_MANIFEST_URL)
     if (!response.ok) {
       return { ok: false, currentVersion, checkedAt, error: `GitHub answered HTTP ${response.status}` }
     }
@@ -449,7 +496,7 @@ async function applyViaOverlay(pluginRoot: string): Promise<UpdateApplyResult> {
   const fromVersion = await readVersionFrom(join(pluginRoot, 'package.json'))
   const work = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-update-'))
   try {
-    const response = await fetchWithTimeout(UPDATE_TARBALL_URL)
+    const response = await fetchWithMirrors(UPDATE_TARBALL_URL)
     if (!response.ok) {
       return { ok: false, fromVersion, mode: 'overlay', restartRequired: false, error: `GitHub answered HTTP ${response.status}` }
     }

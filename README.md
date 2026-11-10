@@ -145,7 +145,7 @@ purge 的文件本来就在仓库里（`packages/dsh-purge/`），挂载关系�
 
 **方式 B：一键脚本（适合想直接改仓库工作副本的）**
 
-下载 [dist/DSH-Workbuddy-Purge-v1.9.15.zip](dist/DSH-Workbuddy-Purge-v1.9.15.zip)，
+下载 [dist/DSH-Workbuddy-Purge-v1.9.16.zip](dist/DSH-Workbuddy-Purge-v1.9.16.zip)，
 解压到任意位置，双击 **`一键安装.bat`**，然后完全退出 DSH 再打开。
 
 脚本会建立 junction 链接指向解压目录，所以**以后这个目录不要删除或移动**；
@@ -157,12 +157,58 @@ purge 的文件本来就在仓库里（`packages/dsh-purge/`），挂载关系�
 | 你现在的状态 | 想换成 | 怎么做 |
 | --- | --- | --- |
 | 链接安装（快照） | 一键脚本（junction） | 跑一次 `一键安装.bat`，junction 会替换掉快照 |
-| 一键脚本（junction） | 链接安装 | 在客户端重新添加链接 |
+| 一键脚本（junction） | 链接安装 | 先在设置 → 插件里移除，再删掉 `一键安装.bat` 留下的链接（见下），最后粘一次仓库链接 |
 | 任一方式 | 修复坏掉的配置 | 跑一次 `一键安装.bat` 就能自愈 |
+
+> **从一键脚本换成链接安装**，按顺序做：
+>
+> 1. 设置 → 插件 → WorkBuddy 积分池 → 移除（这会让 DSH 跑 `pnpm remove`）
+> 2. 删掉脚本建的两条 junction（只删链接，不动任何文件）：
+>    ```powershell
+>    cmd /c rmdir "%USERPROFILE%\.dsh\plugins\dsh-workbuddy-xdpool"
+>    cmd /c rmdir "%USERPROFILE%\.dsh\plugins\dsh-purge"
+>    ```
+> 3. 设置 → 插件 → 添加插件，粘贴本仓库链接
+> 4. 完全退出 DSH 再打开
+>
+> 账号登录状态不受影响 —— 凭据在 WorkBuddy 桌面端自己的目录里，跟插件怎么装无关。
 
 > 一键脚本每次运行都会先备份 `~/.dsh/profiles/desktop/package.json`，
 > 然后重建两条链接、重写注册项，最后回读校验；即使之前的配置文件被写坏
 > （比如带 BOM 导致 DSH 起不来）也能修好。
+
+**GitHub 连不上怎么办**
+
+链接安装这一步是 DSH 调 pnpm 做的（`pnpm add https://github.com/...`），
+如果这台机器连不上 `github.com`，会看到：
+
+```
+[ERR_PNPM_GIT_RESOLVE_FAILED] Failed to resolve git dependency "https://github.com/..."
+```
+
+先确认是不是网络问题：
+
+```powershell
+git ls-remote https://github.com/Clint-Lee/DSH-Workbuddy-Purge.git refs/heads/main
+```
+
+能列出 `refs/heads/main` 就是通的；卡住或报 `Failed to connect` / `ECONNRESET`
+就是网络不通，两条路：
+
+1. **有代理就用代理**（插件更新按钮也直接受益）：
+   ```powershell
+   git config --global http.proxy http://127.0.0.1:7897
+   git config --global https.proxy http://127.0.0.1:7897
+   ```
+   然后把端口换成你自己代理软件的。配完在 DSH 里重试安装。
+   （要撤销：`git config --global --unset http.proxy`）
+2. **没代理就用 zip**：用能打开 GitHub 的设备（手机流量也行）下载
+   [dist/DSH-Workbuddy-Purge-v1.9.16.zip](dist/DSH-Workbuddy-Purge-v1.9.16.zip)，
+   传到这台机器解压，双击 `一键安装.bat`。
+
+> **检查更新 / 立即更新在 1.9.16 起自带镜像回退**：直连 `raw.githubusercontent.com`
+> 和 `codeload.github.com` 失败时会自动改走 `gh-proxy.com` / `ghproxy.net` 重试，
+> 所以连不上 GitHub 的机器照样能点按钮更新（直连能通时不会碰镜像）。
 
 **装好之后怎么更新**
 

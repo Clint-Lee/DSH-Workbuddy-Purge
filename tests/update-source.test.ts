@@ -23,6 +23,8 @@ import { gzipSync } from 'node:zlib'
 
 import {
   UPDATE_BRANCH,
+  UPDATE_MANIFEST_URL,
+  UPDATE_MIRRORS,
   UPDATE_REPO,
   applyUpdate,
   checkForUpdate,
@@ -135,6 +137,34 @@ describe('checkForUpdate', () => {
     // an update check built on it fails for most users. Pin the host.
     expect(UPDATE_REPO).toBe('Clint-Lee/DSH-Workbuddy-Purge')
     expect(UPDATE_BRANCH).toBe('main')
+  })
+
+  it('retries through a mirror when GitHub is unreachable', async () => {
+    // Mainland networks reset the connection to raw.githubusercontent.com; the
+    // check must still work, so each mirror prefix is tried in turn.
+    const root = fakeRoot('1.9.10')
+    const seen: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      seen.push(url)
+      if (seen.length === 1) throw new Error('ECONNRESET')
+      return new Response(JSON.stringify({ version: '1.9.11' }), { status: 200 })
+    }))
+    const result = await checkForUpdate(root)
+    expect(result.ok).toBe(true)
+    expect(result.latestVersion).toBe('1.9.11')
+    expect(seen[0]).toBe(UPDATE_MANIFEST_URL)
+    expect(seen[1]).toBe(`${UPDATE_MIRRORS[0]}${UPDATE_MANIFEST_URL}`)
+  })
+
+  it('prefers the direct answer and never touches a mirror when GitHub works', async () => {
+    const root = fakeRoot('1.9.10')
+    const seen: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      seen.push(url)
+      return new Response(JSON.stringify({ version: '1.9.10' }), { status: 200 })
+    }))
+    await checkForUpdate(root)
+    expect(seen).toEqual([UPDATE_MANIFEST_URL])
   })
 })
 
