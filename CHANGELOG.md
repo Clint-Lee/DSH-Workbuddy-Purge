@@ -1,3 +1,46 @@
+## 1.9.13 — 让「立即更新」在链接安装的机器上真的能用
+
+1.9.11 加的更新按钮有两条路：仓库安装（有 `.git`）走 `git pull`，链接安装（pnpm 快照，没有 `.git`）
+走 tarball 覆盖。第二条路**在这台机器上从来没成功过**，而我当时只测了第一条。
+
+### 坏在哪
+
+覆盖路径原来调 `tar -xzf` 解 GitHub 的 tarball。Windows 自带的是 bsdtar 3.8.8，它碰到
+`一键安装.bat` 和 `packages/dsh-purge/` 下的中文文档名，直接整包 abort：
+
+```
+DSH-Workbuddy-Purge-main/一键安装.bat: Invalid empty pathname: Unknown error
+tar: Error exit delayed from previous errors
+```
+
+注意它**不是跳过那一个条目，是整包失败**。所以凡是用链接安装的人，点「立即更新」永远只会拿到一句
+`tar failed`，一个文件都不会被替换。我自己是 junction 安装，走的是 git 那条路，所以从没撞上。
+
+### 怎么修的
+
+不再调外部 `tar`，改成在进程内解。`node:zlib` 的 `gunzipSync` 去 gzip 头，然后自己按 512 字节块
+走 tar 结构：
+
+- 支持 pax 扩展头（`x`/`g`，GitHub 就用这个装长文件名和非 ASCII 名）、GNU longname（`L`）、
+  以及 ustar 的 `prefix` 字段。
+- 只写 `typeflag` 为 `0`/`\0` 的普通文件；目录靠 `mkdir` 按需建。
+- 剥掉 GitHub 的 `<repo>-<branch>/` 顶层目录 —— 顺带删掉了原来那段"取第一层再进一层"的探测代码。
+- **只落白名单**：`lib/`、`packages/`、`assets/` 三个目录和 8 个具名单文件。tarball 里带
+  `tests/`、`src/`、`.github/` 也不会写到磁盘上。
+- 含 `..` 的路径直接丢弃。
+
+安全性没有退步：仍然是「先下到临时文件 → 解到临时目录 → 校验 5 个必需文件都在 → 才动现场」，
+失败时安装目录一个字节都不变。
+
+### 验证
+
+- 新增 5 项测试（`tests/update-source.test.ts` 的 `extractTarballEntries`）：中文名解包、
+  剥顶层、白名单过滤、拒绝路径穿越、未压缩 tar。第二项第一次跑是红的，原因是我自己造的 pax
+  记录用字符数当字节数算了（`一键安装` 是 4 个字符 12 个字节），已改成按 Buffer 长度算。
+- **真实网络端到端**：造一个没有 `.git` 的伪快照（版本 1.9.0），跑 `applyUpdate`：
+  `1.9.0 → 1.9.13`，`mode: overlay`，备份目录生成，14 个关键文件全部到位，
+  scope guard 内容正确，`src/`/`tests/` 没有泄漏。
+
 ## 1.9.12 — 把 1.9.11 搞出来的界面卡死修掉
 
 1.9.11 有个致命 bug，是我写的：打开 DSH 之后整个界面点不动，只能点标题栏的叉号关掉。

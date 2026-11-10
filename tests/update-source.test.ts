@@ -16,9 +16,10 @@
  */
 
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gzipSync } from 'node:zlib'
 
 import {
   UPDATE_BRANCH,
@@ -26,6 +27,7 @@ import {
   applyUpdate,
   checkForUpdate,
   compareVersions,
+  extractTarballEntries,
   readInstalledVersion,
 } from '../src/update-source.ts'
 
@@ -167,5 +169,153 @@ describe('applyUpdate', () => {
     // operation, which is the routing decision under test.
     expect(result.ok).toBe(false)
     expect(result.error).toContain('git pull failed')
+  })
+})
+
+/**
+ * Tar building blocks for the extractor tests.
+ *
+ * The defect being guarded is a real one: `tar -xzf` (bsdtar 3.8.8 on Windows)
+ * aborts a whole GitHub tarball with `Invalid empty pathname` as soon as it meets
+ * `一键安装.bat`, so every link-installed user was unable to update. A hand-built
+ * archive with non-ASCII names reproduces the input without the network.
+ */
+const BLOCK = 512
+
+function octal(value: number, width: number): string {
+  return value.toString(8).padStart(width - 1, '0') + '\0'
+}
+
+/** One 512-byte ustar header. The parser under test does not verify checksums. */
+function header(name: string, size: number, typeflag: string, prefix = ''): Buffer {
+  const block = Buffer.alloc(BLOCK, 0)
+  block.write(name, 0, 100, 'utf8')
+  block.write(octal(0o644, 8), 100, 'ascii')
+  block.write(octal(0, 8), 108, 'ascii')
+  block.write(octal(0, 8), 116, 'ascii')
+  block.write(octal(size, 12), 124, 'ascii')
+  block.write(octal(0, 12), 136, 'ascii')
+  block.write('        ', 148, 'ascii')
+  block.write(typeflag, 156, 'ascii')
+  block.write('ustar\0', 257, 'ascii')
+  block.write('00', 263, 'ascii')
+  block.write(prefix, 345, 155, 'utf8')
+  return block
+}
+
+/**
+ * A pax record: "<len> <key>=<value>\n", where len is the record's length in
+ * BYTES — not characters. `一键安装` is four characters but twelve bytes, so
+ * measuring with `String.length` produces a record the parser cannot walk.
+ */
+function paxRecord(key: string, value: string): Buffer {
+  const body = Buffer.from(` ${key}=${value}\n`, 'utf8')
+  let digits = 1
+  // The length field is part of the length it describes, so it needs a fixed
+  // point: grow it until adding the digits no longer changes the total.
+  while (String(body.length + digits).length !== digits) digits += 1
+  const total = body.length + digits
+  return Buffer.concat([Buffer.from(`${total}`, 'ascii'), body])
+}
+
+/** File entry, using a pax header when the name needs one. */
+function entry(path: string, content: string): Buffer {
+  const body = Buffer.from(content, 'utf8')
+  const padded = Buffer.alloc(Math.ceil(body.length / BLOCK) * BLOCK, 0)
+  body.copy(padded)
+  // Non-ASCII or over-long names go through pax, exactly as GitHub emits them.
+  if (/[^\x20-\x7e]/.test(path) || path.length > 100) {
+    const record = paxRecord('path', path)
+    const recordPadded = Buffer.alloc(Math.ceil(record.length / BLOCK) * BLOCK, 0)
+    record.copy(recordPadded)
+    return Buffer.concat([header('PaxHeader', record.length, 'x'), recordPadded, header(cut(path), body.length, '0'), padded])
+  }
+  return Buffer.concat([header(path, body.length, '0'), padded])
+}
+
+/** ustar keeps the first 100 BYTES even when pax carries the real name. */
+function cut(path: string): string {
+  return Buffer.from(path, 'utf8').subarray(0, 100).toString('latin1')
+}
+
+/** Gzipped tar with GitHub's `<repo>-<branch>/` wrapper. */
+function archive(entries: readonly Buffer[]): Buffer {
+  const end = Buffer.alloc(BLOCK * 2, 0)
+  return gzipSync(Buffer.concat([...entries, end]))
+}
+
+describe('extractTarballEntries', () => {
+  it('extracts non-ASCII names that make bsdtar abort', async () => {
+    // The exact file that broke the update on Windows.
+    const dir = mkdtempSync(join(tmpdir(), 'wbx-tar-'))
+    created.push(dir)
+    const archivePath = join(dir, 'bundle.tar.gz')
+    writeFileSync(archivePath, archive([
+      entry('repo-main/一键安装.bat', '@echo off\n'),
+      entry('repo-main/lib/index.js', 'export const x = 1\n'),
+    ]))
+    const dest = join(dir, 'stage')
+    mkdirSync(dest, { recursive: true })
+    const written = await extractTarballEntries(archivePath, dest)
+    expect(written).toBe(2)
+    expect(readFileSync(join(dest, '一键安装.bat'), 'utf8')).toBe('@echo off\n')
+    expect(readFileSync(join(dest, 'lib', 'index.js'), 'utf8')).toBe('export const x = 1\n')
+  })
+
+  it('strips the wrapper directory so paths land where the installer expects', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wbx-tar-'))
+    created.push(dir)
+    const archivePath = join(dir, 'bundle.tar.gz')
+    writeFileSync(archivePath, archive([entry('repo-main/package.json', '{"version":"2.0.0"}')]))
+    const dest = join(dir, 'stage')
+    mkdirSync(dest, { recursive: true })
+    await extractTarballEntries(archivePath, dest)
+    expect(existsSync(join(dest, 'package.json'))).toBe(true)
+    expect(existsSync(join(dest, 'repo-main'))).toBe(false)
+  })
+
+  it('writes nothing outside the overlay allow-list', async () => {
+    // A tarball may carry anything; only lib/, packages/, assets/ and the named
+    // files may reach the install tree.
+    const dir = mkdtempSync(join(tmpdir(), 'wbx-tar-'))
+    created.push(dir)
+    const archivePath = join(dir, 'bundle.tar.gz')
+    writeFileSync(archivePath, archive([
+      entry('repo-main/lib/index.js', 'x'),
+      entry('repo-main/tests/secret.test.ts', 'x'),
+      entry('repo-main/src/index.ts', 'x'),
+      entry('repo-main/.github/workflows/ci.yml', 'x'),
+    ]))
+    const dest = join(dir, 'stage')
+    mkdirSync(dest, { recursive: true })
+    const written = await extractTarballEntries(archivePath, dest)
+    expect(written).toBe(1)
+    expect(existsSync(join(dest, 'lib', 'index.js'))).toBe(true)
+    expect(existsSync(join(dest, 'tests'))).toBe(false)
+    expect(existsSync(join(dest, 'src'))).toBe(false)
+    expect(existsSync(join(dest, '.github'))).toBe(false)
+  })
+
+  it('refuses traversal segments', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wbx-tar-'))
+    created.push(dir)
+    const archivePath = join(dir, 'bundle.tar.gz')
+    writeFileSync(archivePath, archive([entry('repo-main/lib/../../evil.js', 'x')]))
+    const dest = join(dir, 'stage')
+    mkdirSync(dest, { recursive: true })
+    const written = await extractTarballEntries(archivePath, dest)
+    expect(written).toBe(0)
+    expect(existsSync(join(dir, 'evil.js'))).toBe(false)
+  })
+
+  it('reads an uncompressed tar too', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wbx-tar-'))
+    created.push(dir)
+    const archivePath = join(dir, 'bundle.tar')
+    writeFileSync(archivePath, Buffer.concat([entry('repo-main/lib/index.js', 'plain'), Buffer.alloc(BLOCK * 2, 0)]))
+    const dest = join(dir, 'stage')
+    mkdirSync(dest, { recursive: true })
+    expect(await extractTarballEntries(archivePath, dest)).toBe(1)
+    expect(readFileSync(join(dest, 'lib', 'index.js'), 'utf8')).toBe('plain')
   })
 })

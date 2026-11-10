@@ -33,6 +33,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { gunzipSync } from 'node:zlib'
 
 /** Repository the bundle is published from. */
 export const UPDATE_REPO = 'Clint-Lee/DSH-Workbuddy-Purge'
@@ -328,10 +329,107 @@ async function applyViaGit(
   return { ok: true, fromVersion, toVersion, mode: 'git', restartRequired: true }
 }
 
-/** Extract a `.tar.gz` into `dest` using the OS tar (always present on 10+). */
-async function extractTarball(archivePath: string, dest: string): Promise<void> {
-  const result = run('tar', ['-xzf', archivePath, '-C', dest], dest)
-  if (!result.ok) throw new Error(`tar failed: ${(result.stderr || result.stdout).trim().slice(0, 300)}`)
+/**
+ * Extract the entries this updater needs out of a GitHub `.tar.gz`, in JS.
+ *
+ * WHY NOT `tar`: measured on Windows 10, `tar -xzf` (bsdtar 3.8.8) aborts the
+ * whole archive with `Invalid empty pathname: Unknown error` on this
+ * repository's non-ASCII filenames — `一键安装.bat` and the Chinese doc under
+ * `packages/dsh-purge/`. That is not a file we could skip, because bsdtar fails
+ * the run rather than the entry. Since the payload is a plain gzipped tar, using
+ * `node:zlib` removes the external process, its platform quirks and its exit
+ * codes from the update path entirely.
+ *
+ * Only files under {@link OVERLAY_DIRS} and the names in {@link OVERLAY_FILES}
+ * are written, so a tarball can carry anything else without touching disk.
+ * GitHub wraps everything in one `<repo>-<branch>/` directory; that first
+ * segment is stripped here, which is also why the caller needs no `top` probe.
+ *
+ * Exported so a test can feed it a synthetic archive: the failure this replaces
+ * (bsdtar refusing non-ASCII names) only shows up with real bytes from GitHub.
+ */
+export async function extractTarballEntries(archivePath: string, dest: string): Promise<number> {
+  const raw = await readFile(archivePath)
+  const gzipped = raw.length > 1 && raw[0] === 0x1f && raw[1] === 0x8b
+  const data = gzipped ? gunzipSync(raw) : raw
+
+  const BLOCK = 512
+  let offset = 0
+  /** Path from a preceding pax header ('x') or GNU longname ('L'). */
+  let pendingName: string | undefined
+  let pendingPax: Map<string, string> | undefined
+  let written = 0
+
+  const cString = (start: number, length: number): string => {
+    const slice = data.subarray(start, start + length)
+    const nul = slice.indexOf(0)
+    return slice.subarray(0, nul === -1 ? slice.length : nul).toString('utf8')
+  }
+
+  while (offset + BLOCK <= data.length) {
+    const headerStart = offset
+    const name = cString(headerStart, 100)
+    // A zeroed header marks the end of the archive (two of them in practice).
+    if (name === '' && cString(headerStart + 156, 1) === '') break
+
+    const rawSize = cString(headerStart + 124, 12).trim()
+    const size = Number.parseInt(rawSize === '' ? '0' : rawSize, 8) || 0
+    const typeflag = cString(headerStart + 156, 1) || '0'
+    const bodyStart = headerStart + BLOCK
+    const body = data.subarray(bodyStart, bodyStart + size)
+    offset = bodyStart + Math.ceil(size / BLOCK) * BLOCK
+
+    if (typeflag === 'x' || typeflag === 'g') {
+      pendingPax = new Map()
+      // Records are "<len> <key>=<value>\n"; len counts the whole record.
+      let cursor = 0
+      while (cursor < body.length) {
+        const space = body.indexOf(0x20, cursor)
+        if (space === -1) break
+        const length = Number.parseInt(body.subarray(cursor, space).toString('ascii'), 10)
+        if (!Number.isFinite(length) || length <= 0) break
+        const record = body.subarray(space + 1, cursor + length - 1).toString('utf8')
+        const eq = record.indexOf('=')
+        if (eq > 0) pendingPax.set(record.slice(0, eq), record.slice(eq + 1))
+        cursor += length
+      }
+      continue
+    }
+    if (typeflag === 'L') {
+      pendingName = body.toString('utf8').replace(/\0+$/u, '')
+      continue
+    }
+
+    // ustar splits long names into prefix + name; pax is what GitHub emits, but
+    // a plain 512-byte header is still legal and cheap to support.
+    const prefix = cString(headerStart + 345, 155)
+    const declared = pendingPax?.get('path') ?? pendingName ?? (prefix === '' ? name : `${prefix}/${name}`)
+    pendingName = undefined
+    pendingPax = undefined
+
+    // Only regular files ("0" or NUL) are of interest: directories are created
+    // on demand by mkdir, and links/specials have no place in this bundle.
+    if (typeflag !== '0' && typeflag !== '\0') continue
+
+    const segments = declared.split('/').filter(segment => segment !== '')
+    if (segments.length < 2) continue
+    // Strip GitHub's single `<repo>-<branch>/` wrapper.
+    const relative = segments.slice(1).join('/')
+    if (relative.split('/').includes('..')) continue
+    if (!isOverlaid(relative)) continue
+
+    const target = join(dest, relative)
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, body)
+    written += 1
+  }
+  return written
+}
+
+/** True when `relative` is an entry the overlay path is allowed to replace. */
+function isOverlaid(relative: string): boolean {
+  if ((OVERLAY_FILES as readonly string[]).includes(relative)) return true
+  return OVERLAY_DIRS.some(dir => relative.startsWith(`${dir}/`))
 }
 
 /**
@@ -360,14 +458,14 @@ async function applyViaOverlay(pluginRoot: string): Promise<UpdateApplyResult> {
 
     const stage = join(work, 'stage')
     await mkdir(stage, { recursive: true })
-    await extractTarball(archivePath, stage)
-
-    // GitHub wraps everything in one `<repo>-<branch>/` directory.
-    const top = (await readdir(stage))[0]
-    if (top === undefined) {
-      return { ok: false, fromVersion, mode: 'overlay', restartRequired: false, error: 'the tarball was empty' }
+    const extracted = await extractTarballEntries(archivePath, stage)
+    if (extracted === 0) {
+      return { ok: false, fromVersion, mode: 'overlay', restartRequired: false, error: 'the tarball carried none of the expected files — nothing was changed' }
     }
-    const staged = join(stage, top)
+
+    // The extractor already strips GitHub's `<repo>-<branch>/` wrapper, so the
+    // staged tree is rooted where `package.json` should be.
+    const staged = stage
     for (const required of REQUIRED_IN_TARBALL) {
       if (!existsSync(join(staged, required))) {
         return {
