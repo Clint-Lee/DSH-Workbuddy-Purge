@@ -1067,6 +1067,19 @@ export class WorkBuddyScheduler {
       const account = accounts[index]
       if (account === undefined) continue
       try {
+        // Refresh FIRST. Automation runs on a timer, hours after the token was
+        // last touched, so its access token is routinely expired while the shim
+        // — which refreshes on 401 — is idle and never notices. Without this,
+        // every task for that account failed with a bare 401, nothing recorded
+        // why, and the account looked like it had stopped working for a day.
+        // A refresh the pool cannot perform is reported as this account's
+        // failure and skipped; the next account still runs.
+        if (!await this.pool.refreshAccount(account.id)) {
+          failed++
+          this.logger.warn?.(`automation ${accountWord} ${account.label} skipped: its sign-in could not be refreshed`)
+          if (index < accounts.length - 1 && this.delayMs > 0 && !this.stopped) await sleep(this.delayMs)
+          continue
+        }
         switch (kind) {
           case 'checkin': {
               try {

@@ -562,6 +562,9 @@ export async function poolWebStatus(
           skippedFiles: deps.pool.skippedFilesInOrder().map(entry => ({
             file: basename(entry.path),
             reason: entry.reason,
+            ...entry.refreshExpiredAtMs === undefined
+              ? {}
+              : { refreshExpiredAt: new Date(entry.refreshExpiredAtMs).toISOString() },
           })),
         },
   }

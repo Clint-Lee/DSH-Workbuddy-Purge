@@ -351,9 +351,19 @@ export const POOL_CARD_CSS = `
   line-height:16px;
   white-space:nowrap;
 }
+/*
+ * One wrapping flex line, not a column grid.
+ *
+ * The picker grew three → four → five modes while the grid stayed at three then
+ * two columns, and each time a chip was stranded on a line of its own: it read
+ * as a card that had fallen out of the layout. A declared column count is what
+ * strands it, so the row wraps instead and every chip carries a flex-basis —
+ * five of them share the line down to ~700px, and a wrapped last chip fills its
+ * own line because flex stretches the items.
+ */
 .dsm-workbuddy-xdpool-dist-options{
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+  display:flex;
+  flex-wrap:wrap;
   gap:6px;
 }
 .dsm-workbuddy-xdpool-dist-option{
@@ -364,6 +374,8 @@ export const POOL_CARD_CSS = `
   display:flex;
   flex-direction:column;
   justify-content:center;
+  flex:1 1 120px;
+  min-width:0;
   min-height:38px;
   border:1px solid var(--wbx-hairline);
   border-radius:var(--wbx-r-sm);
@@ -380,10 +392,19 @@ export const POOL_CARD_CSS = `
 }
 .dsm-workbuddy-xdpool-dist-option:focus-visible{outline:2px solid var(--wbx-brand);outline-offset:1px}
 .dsm-workbuddy-xdpool-dist-option:active:not(:disabled){transform:translateY(.5px)}
+/*
+ * Selected: the card's OWN language, not a borrowed one.
+ *
+ * Green means "this account is healthy" two panels down and the brand blue
+ * belongs to the host chrome, so a choice control borrowing either reads as
+ * somebody else's status. The card's own cue is the raised surface — the same
+ * one the region tabs use — plus a neutral inset bar that survives at a glance
+ * without a wash that would read as hover.
+ */
 .dsm-workbuddy-xdpool-dist-option-active{
-  background:var(--wbx-lift);
-  border-color:color-mix(in oklab,var(--wbx-text-1) 32%,transparent);
-  box-shadow:0 1px 4px rgba(0,0,0,.08),inset 0 0 0 1px color-mix(in oklab,var(--wbx-text-1) 18%,transparent);
+  background:var(--dsw-alias-bg-layer-3,#fff);
+  border-color:color-mix(in oklab,var(--dsw-alias-label-primary,#0f1115) 26%,transparent);
+  box-shadow:0 1px 4px rgba(0,0,0,.08),inset 3px 0 0 var(--dsw-alias-label-primary,#0f1115);
   color:var(--wbx-text-1);
 }
 .dsm-workbuddy-xdpool-dist-option:disabled{cursor:default;opacity:.55}
@@ -1414,6 +1435,9 @@ export const POOL_CARD_CSS = `
   .dsm-workbuddy-xdpool-panel-total{grid-template-columns:1fr;row-gap:12px}
   .dsm-workbuddy-xdpool-checkin{grid-column:1;grid-row:auto;justify-content:flex-start}
   .dsm-workbuddy-xdpool-checkin-meta{align-items:flex-start}
+  /* On a phone the chips wrap anyway, so there is nothing to line up: the
+     desktop min-height only reserves height a one-chip line does not need. */
+  .dsm-workbuddy-xdpool-dist-option{min-height:0}
 }
 
 @media (prefers-reduced-motion:reduce){

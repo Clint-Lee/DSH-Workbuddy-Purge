@@ -9,7 +9,7 @@
 export const en = {
   // The Settings nav row. Short by design: the nav column is narrow and the
   // card body already carries the full product name.
-  'row.navLabel': 'XD Pool',
+  'row.navLabel': 'WorkBuddy Pool',
   'row.title': 'WorkBuddy 积分池',
   'row.desc': 'Route every WorkBuddy sign-in on this machine into DSH as one auto-failing-over model pool.',
   'row.expand': 'Expand',
@@ -112,6 +112,7 @@ export const en = {
   'row.skippedEncrypted': 'encrypted — start WorkBuddy once so its key can be read',
   'row.skippedUnreadable': 'file could not be read',
   'row.skippedMalformed': 'not a credential file',
+  'row.skippedExpired': 'sign-in expired — sign in again',
   'row.imageCapable': 'image input',
   'row.rate': '{rate}x credits',
   'row.accountsRescan': 'Detect accounts again',
@@ -176,7 +177,7 @@ export const en = {
 export type WorkBuddyPoolSettingsKey = keyof typeof en
 
 export const zh: Record<WorkBuddyPoolSettingsKey, string> = {
-  'row.navLabel': 'XD Pool',
+  'row.navLabel': 'WorkBuddy Pool',
   'row.title': 'WorkBuddy 积分池',
   'row.desc': '把本机所有已登录的 WorkBuddy 账号并入 DSH，作为一个自动容错的模型池使用。',
   'row.expand': '展开',
@@ -279,6 +280,7 @@ export const zh: Record<WorkBuddyPoolSettingsKey, string> = {
   'row.skippedEncrypted': '已加密 —— 启动一次 WorkBuddy 才能取到密钥',
   'row.skippedUnreadable': '文件读不出来',
   'row.skippedMalformed': '不是凭据文件',
+  'row.skippedExpired': '登录已过期 —— 重新登录一次',
   'row.imageCapable': '图片输入',
   'row.rate': '{rate}x 积分',
   'row.accountsRescan': '重新检测账号',

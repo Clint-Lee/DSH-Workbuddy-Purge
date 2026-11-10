@@ -444,9 +444,10 @@ export declare class WorkBuddyUpstreamClient {
   constructor(options?: UpstreamClientOptions);
   /**
    * Normalize an OpenAI chat-completions body for the WorkBuddy upstream:
-   * force `stream: true` (the upstream rejects non-streaming), convert the
-   * DSH `developer` role into `system` (upstream rejects `developer` with
-   * business code 11128), and flatten `tool_choice` into its string form.
+   * force `stream: true` (the upstream rejects non-streaming with 11101),
+   * rewrite every role onto the set the gateway accepts (`developer` is refused
+   * with business code 11128 — see {@link gatewayRole}), and flatten
+   * `tool_choice` into the string form the gateway parses.
    */
   prepareChatBody(raw: string): string;
   /**
@@ -458,6 +459,29 @@ export declare class WorkBuddyUpstreamClient {
   parseChatBody(raw: string): Record<string, unknown> | undefined;
   /** Re-serialise `base` with a rewritten `messages` array, still normalised. */
   buildChatBody(base: Record<string, unknown>, messages: readonly ChatMessage[]): string;
+  /**
+   * Rebuild a request body the gateway cannot mistake for a third-party client.
+   *
+   * The recovery step for business code 11128. `prepareChatBody` already fixes
+   * the one shape this plugin knows the harness emits (the `developer` role);
+   * this goes further and rebuilds EVERYTHING from an explicit whitelist —
+   * roles, content blocks, tool calls, tool declarations and top-level fields —
+   * because the gateway's exact rules are not published and it treats any field
+   * or block type it does not recognise as a channel violation. Anything the
+   * gateway parses survives; anything unknown is converted to plain text or
+   * dropped, which is the only trade that keeps the turn alive.
+   *
+   * Returns the input unchanged when it cannot be parsed, so a caller can
+   * compare strings to decide whether a retry is worth sending.
+   *
+   * `demoteInstructions` is the in-band fallback: every instruction message is
+   * re-sent as a user turn. It exists because the gateway also content-filters
+   * the instruction roles and answers 11128 when the harness's own system prompt
+   * trips it — the same text passes as `user`. Measured, not guessed.
+   */
+  sanitizeForChannel(raw: string, options?: {
+    demoteInstructions?: boolean;
+  }): string;
   /**
    * Run one NON-streaming completion and return the assistant text.
    *
@@ -762,7 +786,17 @@ export declare const WORKBUDDY_AUTH_FILE_ENV = "WORKBUDDY_AUTH_FILE";
  */
 interface WorkBuddySkippedFile {
   path: string;
-  reason: 'encrypted' | 'unreadable' | 'malformed';
+  /**
+   * Why the file did not become an account.
+   *
+   * `expiredRefresh` is its own case rather than a flavour of `malformed`: the
+   * document is perfectly valid, its refresh window has simply closed, and the
+   * only fix is to sign in again. Reporting it as "not a credential file" sends
+   * the user looking for a corrupt file that is not there.
+   */
+  reason: 'encrypted' | 'unreadable' | 'malformed' | 'expiredRefresh';
+  /** When the refresh window closed, for `expiredRefresh`; epoch ms. */
+  refreshExpiredAtMs?: number;
 }
 interface WorkBuddyCredential {
   accessToken: string;
@@ -855,6 +889,14 @@ interface AccountPoolOptions {
   };
   /** Override the directories scanned (tests). */
   authDirs?: readonly string[];
+  /**
+   * Directory holding this pool's own persisted refreshes.
+   *
+   * Defaults to the plugin data directory, and is DISABLED whenever `authDirs`
+   * is given explicitly — a test that points the pool at a temp auth directory
+   * must not discover (or write) the real user's plugin state.
+   */
+  refreshedDir?: string | undefined;
   /** How long a rate-limited account stays out of rotation. */
   cooldownMs?: number;
   /** How long an account rests after its credits run out (default 30 minutes). */
@@ -890,6 +932,14 @@ interface AccountPoolOptions {
 export declare class WorkBuddyAccountPool {
   private readonly logger;
   private authDirs;
+  /**
+   * Where this pool persists the tokens it refreshed, or undefined to keep them
+   * in memory only.
+   *
+   * Undefined for custom `authDirs` (tests, alternate installs) so those never
+   * touch the real plugin data directory.
+   */
+  private refreshedDir;
   private cooldownMs;
   /**
    * How long an account stays out of rotation after the upstream reports its
@@ -1237,6 +1287,15 @@ export declare class WorkBuddyAccountPool {
    */
   private ensureFresh;
   /**
+   * Write the account's current credential to the pool's own store.
+   *
+   * Best effort by design: a read-only or full disk must not turn a successful
+   * refresh into a failed one. The in-memory token is still good for this
+   * process, and the next restart simply falls back to the app's snapshot — the
+   * old behaviour, not a new failure.
+   */
+  private persistRefreshed;
+  /**
    * Cool a whole account after the upstream reports its credits are spent.
    *
    * Credit exhaustion is an ACCOUNT condition, unlike a model rate limit: every
@@ -1537,11 +1596,21 @@ interface PoolWebStatus {
    */
   skippedFiles?: readonly PoolWebSkippedFile[];
 }
-/** A credential file the pool could not read. */
+/** A credential file the pool could not use. */
 interface PoolWebSkippedFile {
   /** Basename only; the full path lives in the desktop app's auth directory. */
   file: string;
-  reason: 'encrypted' | 'unreadable' | 'malformed';
+  /**
+   * Why it did not become an account.
+   *
+   * `expiredRefresh` is deliberately separate from `malformed`: the document is
+   * intact and correctly formatted, its refresh window has simply closed, and
+   * only a fresh sign-in can fix it. Reporting those as "not a credential file"
+   * sent users hunting for a corrupt file that was never corrupt.
+   */
+  reason: 'encrypted' | 'unreadable' | 'malformed' | 'expiredRefresh';
+  /** ISO timestamp of when the refresh window closed, for `expiredRefresh`. */
+  refreshExpiredAt?: string;
 }
 /** How a region's model list was obtained. */
 type PoolWebCatalogSource = 'live' | 'fallback';
@@ -1881,6 +1950,16 @@ interface AutomationOptions {
   streakHours?: readonly number[];
   /** Hour list for the buddy travel job. */
   travelHours?: readonly number[];
+  /**
+   * Put the account back on a plain skin after the appearance task is scored.
+   * Absent reads as true — leaving the featured skin on is a side effect the user
+   * never agreed to, so the safe default is to undo it.
+   */
+  appearanceRestore?: boolean;
+  /** Delay before restoring, in milliseconds (default 60_000). */
+  appearanceRestoreDelayMs?: number;
+  /** `resource_key` to restore to (default `theme-default`). */
+  appearanceRestoreKey?: string;
   /** Per-account serial delay, in milliseconds. */
   accountDelayMs?: number;
   /** Override the gap between expert chains, in milliseconds (tests use 0). */
@@ -2100,6 +2179,17 @@ export declare class WorkBuddyScheduler {
   private readonly now;
   private readonly delayMs;
   /**
+   * Skin handling for the appearance task.
+   *
+   * The task only scores when the featured theme is really selected, so applying
+   * it is unavoidable; leaving it applied is not. These three fields queue the
+   * restore and are read at fire time, so a restore scheduled just before a
+   * restart still lands on the next tick.
+   */
+  private readonly appearanceRestore;
+  private readonly appearanceRestoreDelayMs;
+  private readonly appearanceRestoreKey;
+  /**
    * How long to wait for event scoring before re-reading the task list.
    * Tests set 0 so a pass does not spend nine real seconds per account.
    */
@@ -2314,6 +2404,18 @@ export declare class WorkBuddyScheduler {
    */
   private sendChain;
   /**
+   * Put the account back on a plain skin once the appearance task has scored.
+   *
+   * Fire-and-forget on purpose: the restore must not delay the rest of the pass,
+   * and a failure here must never fail the task (the points are already earned by
+   * the time this runs). Errors are logged and swallowed for that reason.
+   *
+   * The timer is unref'd where the runtime allows it so a pending restore cannot
+   * keep the process alive on shutdown; a restore that never fires leaves the
+   * featured skin on, which is exactly the old behaviour rather than a new risk.
+   */
+  private queueAppearanceRestore;
+  /**
    * Build every chain that scores one task.
    *
    * Most tasks need a single chain; `template_5` needs five, because the scorer
@@ -2393,6 +2495,15 @@ interface AccountStatus {
     until: string;
   }[];
   rateLimitHits: number;
+  /**
+   * Whether the user switched this account out of rotation.
+   *
+   * Travels with the row because the settings card renders its enable/disable
+   * pill from it: omitted here while the automation serializer emitted it, the
+   * toggle saved correctly but never rendered as off, so the button looked
+   * stuck on "enabled".
+   */
+  disabled: boolean;
   /** Read-only aggregated credit summary for the account. */
   credits?: WorkBuddyCredits;
   creditsError?: string;
@@ -2714,6 +2825,34 @@ export interface AutomationConfig {
   travelHours?: number[];
   /** How long an account rests after its credits run out, in milliseconds. */
   exhaustCooldownMs?: number;
+  /**
+   * Put the account back on a plain skin after the appearance task is scored.
+   *
+   * The `Hp_Appearance` task only scores when the account really has the featured
+   * theme selected, so the scheduler has to apply it. Leaving it there means the
+   * user's WorkBuddy changes skin — which is a side effect nobody asked for.
+   * Default true: apply the theme, collect the points, then restore.
+   */
+  appearanceRestore?: boolean;
+  /**
+   * How long to wait before restoring, in milliseconds. Default 60000.
+   *
+   * Scoring is asynchronous upstream (an event is usually reflected after about
+   * eight seconds), so restoring immediately can land before the task is counted.
+   * A minute is a safe margin that still keeps the visible change brief.
+   */
+  appearanceRestoreDelayMs?: number;
+  /**
+   * The `resource_key` to restore to. Default "theme-default".
+   *
+   * The default is "light", read out of WorkBuddy's own Local Storage
+   * (`appearance.lastApplied`: {"kind":"theme","resourceKey":"light",
+   * "series":"base","appearance":"light"}). The plain skin is the BASE series
+   * key "light" — it does not follow the `theme-xxxxxx` shape of the featured
+   * skins. If a build rejects it the restore is a no-op: the points are already
+   * claimed, only the skin stays as the featured theme.
+   */
+  appearanceRestoreKey?: string;
 }
 /** Upper bound the card offers as the "default" context window, in tokens. */
 export declare const DEFAULT_CONTEXT_BUDGET = 200000;

@@ -336,11 +336,21 @@ export interface PoolWebStatus {
   skippedFiles?: readonly PoolWebSkippedFile[]
 }
 
-/** A credential file the pool could not read. */
+/** A credential file the pool could not use. */
 export interface PoolWebSkippedFile {
   /** Basename only; the full path lives in the desktop app's auth directory. */
   file: string
-  reason: 'encrypted' | 'unreadable' | 'malformed'
+  /**
+   * Why it did not become an account.
+   *
+   * `expiredRefresh` is deliberately separate from `malformed`: the document is
+   * intact and correctly formatted, its refresh window has simply closed, and
+   * only a fresh sign-in can fix it. Reporting those as "not a credential file"
+   * sent users hunting for a corrupt file that was never corrupt.
+   */
+  reason: 'encrypted' | 'unreadable' | 'malformed' | 'expiredRefresh'
+  /** ISO timestamp of when the refresh window closed, for `expiredRefresh`. */
+  refreshExpiredAt?: string
 }
 
 /** How a region's model list was obtained. */

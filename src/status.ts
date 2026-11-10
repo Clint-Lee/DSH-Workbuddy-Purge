@@ -27,6 +27,15 @@ export interface AccountStatus {
    *  itself is not `cooling` while only some models are limited. */
   modelCooldowns?: readonly { modelId: string; until: string }[]
   rateLimitHits: number
+  /**
+   * Whether the user switched this account out of rotation.
+   *
+   * Travels with the row because the settings card renders its enable/disable
+   * pill from it: omitted here while the automation serializer emitted it, the
+   * toggle saved correctly but never rendered as off, so the button looked
+   * stuck on "enabled".
+   */
+  disabled: boolean
   /** Read-only aggregated credit summary for the account. */
   credits?: WorkBuddyCredits
   creditsError?: string

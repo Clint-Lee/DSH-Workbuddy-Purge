@@ -326,7 +326,7 @@ describe('the settings page renders on both kernel lines', () => {
     const locales = readFileSync(new URL('../src/client/locales.ts', import.meta.url), 'utf8')
     const labels = locales.match(/'row\.navLabel': '([^']+)'/g) ?? []
     expect(labels.length).toBe(2)
-    for (const line of labels) expect(line).toContain('XD Pool')
+    for (const line of labels) expect(line).toContain('WorkBuddy Pool')
   })
 })
 

@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { regionOf, type WorkBuddyRegion } from './upstream.ts'
 import {
   encryptedFieldKeyId,
@@ -22,6 +22,11 @@ import {
   readAtRestKey,
   atRestKeyFor,
 } from './at-rest.ts'
+import {
+  REFRESHED_DIR_NAME,
+  refreshedDir as refreshedStoreDir,
+  writeRefreshedCredentialAt,
+} from './refreshed-store.ts'
 
 /** Minimal upstream surface the pool needs to refresh a token (no circular import). */
 export interface TokenRefresher {
@@ -52,7 +57,17 @@ export const WORKBUDDY_AUTH_FILE_ENV = 'WORKBUDDY_AUTH_FILE'
  */
 export interface WorkBuddySkippedFile {
   path: string
-  reason: 'encrypted' | 'unreadable' | 'malformed'
+  /**
+   * Why the file did not become an account.
+   *
+   * `expiredRefresh` is its own case rather than a flavour of `malformed`: the
+   * document is perfectly valid, its refresh window has simply closed, and the
+   * only fix is to sign in again. Reporting it as "not a credential file" sends
+   * the user looking for a corrupt file that is not there.
+   */
+  reason: 'encrypted' | 'unreadable' | 'malformed' | 'expiredRefresh'
+  /** When the refresh window closed, for `expiredRefresh`; epoch ms. */
+  refreshExpiredAtMs?: number
 }
 
 export interface WorkBuddyCredential {
@@ -206,6 +221,39 @@ export function isEncryptedCredentialError(value: unknown): boolean {
     && (value as { code?: unknown }).code === ENCRYPTED_CREDENTIAL_CODE
 }
 
+/**
+ * Marker for "this document is a credential, but its refresh window has closed".
+ *
+ * Deliberately distinct from a parse failure. The document is intact and the
+ * account is real; the upstream simply will not exchange that refresh token any
+ * more, so signing in again is the only fix. Surfacing that as "malformed" sent
+ * the user hunting for a corrupt file that was never corrupt, and — worse — a
+ * pool that had silently dropped the account looked like the account had been
+ * deleted.
+ */
+export const REFRESH_EXPIRED_CODE = 'REFRESH_EXPIRED'
+
+export class WorkBuddyRefreshExpiredError extends Error {
+  readonly code = REFRESH_EXPIRED_CODE
+  /** When the refresh window closed; epoch ms. */
+  readonly refreshExpiredAtMs: number
+  constructor(sourcePath: string, refreshExpiredAtMs: number) {
+    super(
+      `workbuddy: ${sourcePath} is a credential whose refresh window closed at `
+        + `${new Date(refreshExpiredAtMs).toISOString()}. Sign in again in the WorkBuddy app `
+        + 'to mint a new one; this file cannot be refreshed.',
+    )
+    this.name = 'WorkBuddyRefreshExpiredError'
+    this.refreshExpiredAtMs = refreshExpiredAtMs
+  }
+}
+
+/** True when a thrown value is the refresh-expired marker (cross-bundle safe). */
+export function isRefreshExpiredError(value: unknown): value is WorkBuddyRefreshExpiredError {
+  return typeof value === 'object' && value !== null
+    && (value as { code?: unknown }).code === REFRESH_EXPIRED_CODE
+}
+
 function decryptableString(
   value: unknown,
   decrypt: ((field: unknown) => string) | undefined,
@@ -268,11 +316,16 @@ export function parseWorkBuddyAuth(
   const accessToken = accessField.value
   if (accessToken === '') return undefined
 
-  // Skip documents whose refresh window has already closed: they cannot recover.
+  // A document whose refresh window has already closed cannot recover, so it is
+  // not an account. It is NOT silently dropped, though: `expiredRefresh` tells
+  // the caller this file is a credential that needs a fresh sign-in, which is the
+  // one actionable fix. Reporting it as an ordinary skip made the pool say "that
+  // is not a credential file" while the user's account was really sitting there,
+  // expired — the "my second account disappeared overnight" report.
   const refreshExpiresAtMs =
     typeof auth['refreshExpiresAt'] === 'number' ? expiryToMs(auth['refreshExpiresAt']) : undefined
   if (refreshExpiresAtMs !== undefined && refreshExpiresAtMs > 0 && refreshExpiresAtMs < Date.now()) {
-    return undefined
+    throw new WorkBuddyRefreshExpiredError(sourcePath, refreshExpiresAtMs)
   }
 
   // The upstream's own issue time, the only signal that stays truthful after a
@@ -315,14 +368,35 @@ function isLiveAuthFile(path: string): boolean {
 }
 
 /**
+ * True when `path` is this plugin's own persisted refresh, not the app's file.
+ *
+ * The pool writes these under its own data directory (see refreshed-store.ts),
+ * and they are the ONLY place the token the upstream issued after a refresh
+ * survives a host restart.
+ */
+function isRefreshedAuthFile(path: string): boolean {
+  return path.includes(`${sep}${REFRESHED_DIR_NAME}${sep}`)
+}
+
+/**
  * Which of two credentials for the same account the pool should keep.
  *
  * Ordering, highest first:
  *
- * 1. the live file the desktop app is signed in with;
- * 2. the credential the upstream issued most recently (`lastRefreshAtMs`);
+ * 1. the credential the upstream issued most recently (`lastRefreshAtMs`);
+ * 2. the live file the desktop app is signed in with;
  * 3. the longer stored expiry, as a fallback for documents that carry no issue
- *    time (the plugin's own refreshed copy, older builds).
+ *    time (older builds).
+ *
+ * Issue time leads because a refresh ROTATES the refresh token: after that, the
+ * app's snapshot holds a token the upstream has already spent, and preferring it
+ * (as the old "live first" rule did) brought the account back from every restart
+ * as `invalid_grant` — the account looked like it had deleted itself overnight.
+ * A genuine re-login still wins, because the app stamps the live file with a
+ * later issue time than any refresh we did before it.
+ *
+ * The live file keeps its precedence against plain snapshots, whose issue times
+ * can look newer for reasons unrelated to which token actually works.
  *
  * The stored expiry alone is NOT a freshness signal: the upstream does not
  * rewrite it when it revokes a token, so a long-dead backup can claim to expire
@@ -332,11 +406,20 @@ function isLiveAuthFile(path: string): boolean {
 function compareFreshness(a: WorkBuddyCredential, b: WorkBuddyCredential): number {
   const aLive = isLiveAuthFile(a.sourcePath) ? 1 : 0
   const bLive = isLiveAuthFile(b.sourcePath) ? 1 : 0
-  if (aLive !== bLive) return bLive - aLive
+  const aRefreshed = isRefreshedAuthFile(a.sourcePath) ? 1 : 0
+  const bRefreshed = isRefreshedAuthFile(b.sourcePath) ? 1 : 0
 
   const aIssued = a.lastRefreshAtMs ?? 0
   const bIssued = b.lastRefreshAtMs ?? 0
-  if (aIssued !== bIssued) return bIssued - aIssued
+  if (aIssued !== bIssued) {
+    // Two plain files: the live session still leads, whatever the issue times
+    // say. Only a file this pool refreshed may outrank the app's live sign-in.
+    if (aRefreshed === 0 && bRefreshed === 0 && aLive !== bLive) return bLive - aLive
+    return bIssued - aIssued
+  }
+
+  if (aRefreshed !== bRefreshed) return bRefreshed - aRefreshed
+  if (aLive !== bLive) return bLive - aLive
 
   return b.expiresAtMs - a.expiresAtMs
 }
@@ -386,23 +469,35 @@ async function authFilesIn(dir: string): Promise<string[]> {
 }
 
 /**
- * One credential file, or undefined when it cannot be used.
+ * Outcome of reading one credential file: either a usable credential, or the
+ * reason it was skipped.
  *
- * Returns undefined — rather than throwing — for every failure mode, so ONE bad
- * file cannot empty the pool. That is the whole point: an auth directory blends
- * plain files, encrypted files, half-written files and files from an app version
- * this plugin cannot read, and a scan that aborts on the first unusable one
- * reports "you have 2 accounts" when it means "I could not open the other two".
+ * A single `undefined` used to mean both "no credential here" and "a credential
+ * you need to know about", so the caller had to re-read the file to guess which —
+ * and guessed wrong for expired refresh windows.
+ */
+type CredentialReadResult =
+  | { credential: WorkBuddyCredential }
+  | { skipped: WorkBuddySkippedFile }
+
+/**
+ * One credential file, or the reason it cannot be used.
+ *
+ * Never throws for a per-file problem, so ONE bad file cannot empty the pool.
+ * That is the whole point: an auth directory blends plain files, encrypted
+ * files, half-written files and files from an app version this plugin cannot
+ * read, and a scan that aborts on the first unusable one reports "you have 2
+ * accounts" when it means "I could not open the other two".
  *
  * The caller surfaces the ones it skipped, so the count never silently
  * disagrees with what is on disk.
  */
-async function readCredential(path: string): Promise<WorkBuddyCredential | undefined> {
+async function readCredential(path: string): Promise<CredentialReadResult> {
   let text: string
   try {
     text = await readFile(path, 'utf8')
   } catch {
-    return undefined
+    return { skipped: { path, reason: 'unreadable' } }
   }
   // Fetch the app's at-rest key once per process, and only when the document
   // actually carries an encrypted field: plain-string builds must not spawn the
@@ -410,15 +505,26 @@ async function readCredential(path: string): Promise<WorkBuddyCredential | undef
   // encrypted field into a thrown `WorkBuddyEncryptedCredentialError` instead of
   // a silent "no credential".
   const decrypt = text.includes('"$wbEncrypted"') ? await encryptedFieldOpener() : undefined
+  let credential: WorkBuddyCredential | undefined
   try {
-    return parseWorkBuddyAuth(text, path, decrypt)
-  } catch {
-    // Encrypted-but-unopenable, malformed, or an unknown shape: skip THIS file.
-    // Previously this rethrew `WorkBuddyEncryptedCredentialError`, which
-    // propagated out of `scan()` and discarded every account that had parsed
-    // fine — the reported "4 accounts become 2 after switching sign-in".
-    return undefined
+    credential = parseWorkBuddyAuth(text, path, decrypt)
+  } catch (error: unknown) {
+    // Encrypted-but-unopenable, malformed, unknown shape or an expired refresh
+    // window: skip THIS file, and say which. Previously this rethrew
+    // `WorkBuddyEncryptedCredentialError`, which propagated out of `scan()` and
+    // discarded every account that had parsed fine — the reported "4 accounts
+    // become 2 after switching sign-in".
+    if (isRefreshExpiredError(error)) {
+      return {
+        skipped: { path, reason: 'expiredRefresh', refreshExpiredAtMs: error.refreshExpiredAtMs },
+      }
+    }
+    return { skipped: { path, reason: isEncryptedCredentialError(error) ? 'encrypted' : 'malformed' } }
   }
+  // No access token at all: either a non-credential document or one whose token
+  // field is encrypted and unopenable. `skipReasonFor` tells the two apart.
+  if (credential === undefined) return { skipped: { path, reason: await skipReasonFor(path) } }
+  return { credential }
 }
 
 /**
@@ -528,6 +634,18 @@ export function candidateAuthDirs(env: NodeJS.ProcessEnv = process.env): string[
   return dirs
 }
 
+/**
+ * Where refreshed credentials are persisted by default: inside the plugin's own
+ * data directory, beside `ignored.json`.
+ *
+ * Deliberately NOT inside the desktop app's auth directory. Those files belong
+ * to another program, and a plugin that starts writing `.info` documents next to
+ * the app's own would be one filename collision away from corrupting a sign-in.
+ */
+export function defaultRefreshedDir(env: NodeJS.ProcessEnv = process.env): string {
+  return refreshedStoreDir(env)
+}
+
 /** How the pool chooses which account serves the next request. */
 export type AccountDistribution = 'priority' | 'round-robin' | 'balanced' | 'sticky' | 'expiry'
 
@@ -544,6 +662,14 @@ export interface AccountPoolOptions {
   logger?: { info?(...args: unknown[]): void; warn(...args: unknown[]): void; error?(...args: unknown[]): void }
   /** Override the directories scanned (tests). */
   authDirs?: readonly string[]
+  /**
+   * Directory holding this pool's own persisted refreshes.
+   *
+   * Defaults to the plugin data directory, and is DISABLED whenever `authDirs`
+   * is given explicitly — a test that points the pool at a temp auth directory
+   * must not discover (or write) the real user's plugin state.
+   */
+  refreshedDir?: string | undefined
   /** How long a rate-limited account stays out of rotation. */
   cooldownMs?: number
   /** How long an account rests after its credits run out (default 30 minutes). */
@@ -637,6 +763,14 @@ function isCredentialDeadError(error: unknown): boolean {
 export class WorkBuddyAccountPool {
   private readonly logger: AccountPoolOptions['logger']
   private authDirs: readonly string[]
+  /**
+   * Where this pool persists the tokens it refreshed, or undefined to keep them
+   * in memory only.
+   *
+   * Undefined for custom `authDirs` (tests, alternate installs) so those never
+   * touch the real plugin data directory.
+   */
+  private refreshedDir: string | undefined
   private cooldownMs: number
   /**
    * How long an account stays out of rotation after the upstream reports its
@@ -743,6 +877,11 @@ export class WorkBuddyAccountPool {
   constructor(options: AccountPoolOptions = {}) {
     this.logger = options.logger
     this.authDirs = options.authDirs ?? candidateAuthDirs()
+    // A pool pointed at explicit directories is a test or a custom install; it
+    // must not read or write the real user's plugin state. Everything else gets
+    // the default store, which is what makes a refresh survive a restart.
+    this.refreshedDir = options.refreshedDir
+      ?? (options.authDirs === undefined ? defaultRefreshedDir() : undefined)
     this.cooldownMs = options.cooldownMs ?? 60_000
     this.exhaustCooldownMs = options.exhaustCooldownMs ?? EXHAUST_COOLDOWN_MS
     this.credentialDeadCooldownMs = options.credentialDeadCooldownMs ?? CREDENTIAL_DEAD_COOLDOWN_MS
@@ -825,7 +964,13 @@ export class WorkBuddyAccountPool {
   async scan(): Promise<WorkBuddyAccount[]> {
     const found: WorkBuddyCredential[] = []
     const skipped: WorkBuddySkippedFile[] = []
-    for (const dir of this.authDirs) {
+    const scanDirs = this.refreshedDir === undefined
+      ? this.authDirs
+      // The pool's own persisted refreshes are scanned LAST so a live sign-in
+      // and the app's snapshots keep their natural order among themselves; the
+      // freshness rules then pick whichever token is genuinely newest.
+      : [...this.authDirs, this.refreshedDir]
+    for (const dir of scanDirs) {
       for (const file of await authFilesIn(dir)) {
         // Honour the ignore list BEFORE reading the document's key material.
         // `cheapIdentityId` reads only the plain `uin`/`uid` fields, so an
@@ -837,14 +982,15 @@ export class WorkBuddyAccountPool {
           const cheapId = await cheapIdentityIdFromFile(file)
           if (cheapId !== undefined && this.ignoredIds.has(cheapId)) continue
         }
-        const credential = await readCredential(file)
-        if (credential === undefined) {
+        const outcome = await readCredential(file)
+        if ('skipped' in outcome) {
           // Record WHY, so a pool of "2" next to a disk holding 4 files can say
           // which two were unreadable and what prevented them. Silently dropping
           // them is what made the number look like accounts had vanished.
-          skipped.push({ path: file, reason: await skipReasonFor(file) })
+          skipped.push(outcome.skipped)
           continue
         }
+        const credential = outcome.credential
         // Second gate: the cheap probe could not identify this file, so the
         // ignored check happens now that the credential is fully parsed.
         if (this.ignoredIds.size > 0 && this.ignoredIds.has(workbuddyAccountId(credential))) continue
@@ -1401,7 +1547,17 @@ export class WorkBuddyAccountPool {
             ? Date.now() + outcome.expiresInSec * 1000
             : credential.expiresAtMs,
           ...outcome.domain === undefined || outcome.domain === '' ? {} : { domain: outcome.domain },
+          // Stamp the issue time ourselves. The app's snapshots carry
+          // `lastRefreshTime` and the freshness rules rank on it; a refreshed
+          // copy without one would sort below the app's now-spent snapshot and
+          // be discarded on the next scan — precisely the bug this prevents.
+          lastRefreshAtMs: Date.now(),
         }
+        // Persist BEFORE anything else can fail. A refresh rotates the refresh
+        // token upstream, so the on-disk copy is spent from this instant: if the
+        // new one is only kept in memory, the next host restart reads the spent
+        // one, gets `invalid_grant`, and the account looks deleted overnight.
+        await this.persistRefreshed(account)
         // A working refresh is the strongest possible proof the sign-in is
         // alive again — undo any earlier dead mark.
         this.clearCredentialDead(account.id)
@@ -1433,6 +1589,23 @@ export class WorkBuddyAccountPool {
       return await run
     } finally {
       this.refreshInflight.delete(account.id)
+    }
+  }
+
+  /**
+   * Write the account's current credential to the pool's own store.
+   *
+   * Best effort by design: a read-only or full disk must not turn a successful
+   * refresh into a failed one. The in-memory token is still good for this
+   * process, and the next restart simply falls back to the app's snapshot — the
+   * old behaviour, not a new failure.
+   */
+  private async persistRefreshed(account: WorkBuddyAccount): Promise<void> {
+    if (this.refreshedDir === undefined) return
+    try {
+      await writeRefreshedCredentialAt(this.refreshedDir, account.id, account.credential)
+    } catch (error: unknown) {
+      this.logger?.warn?.(`dsh-workbuddy-xdpool: could not persist the refreshed token for ${account.label}`, error)
     }
   }
 

@@ -697,12 +697,18 @@ describe('scheduler account gating', () => {
     await (scheduler as unknown as { tick(): Promise<void> }).tick()
   }
 
-  it('never calls upstream for a global account', async () => {
+  it('runs growth tasks for a global account but never checks it in', async () => {
+    // The growth system used to be treated as CN-only, so a global account was
+    // skipped outright. That was too blunt: only check-in is missing on the
+    // international gateway (/v2/billing/meter/checkin and friends answer 404),
+    // while tasks, report and travel all live under activity/growth/* and work
+    // there. Excluding the account entirely cost those points every day.
     const { pool, upstream } = await harness(1, { domain: 'workbuddy.ai' })
     const when = beijing(2026, 8, 7, 11, 0, 0)
     const scheduler = new WorkBuddyScheduler(pool, upstream.client, {
       enabled: true,
       taskHours: [11],
+      checkinHours: [11],
       accountDelayMs: 0,
       eventScoreWaitMs: 0,
       expertGapMs: 0,
@@ -710,8 +716,10 @@ describe('scheduler account gating', () => {
       logger: { info() {}, warn() {} },
     })
     await tickAt(scheduler, when)
-    expect(upstream.calls).toEqual([])
-    expect(scheduler.status().jobs.tasks.ok).toBe(0)
+
+    expect(upstream.calls).not.toContain('checkin')
+    expect(upstream.calls).toContain('listTasks')
+    expect(scheduler.status().jobs.checkin.ok).toBe(0)
   })
 
   it('skips an account the user switched off', async () => {

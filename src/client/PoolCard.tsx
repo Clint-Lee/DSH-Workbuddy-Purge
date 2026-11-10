@@ -1029,30 +1029,6 @@ export function PoolCard({ t, settingsScope }: PoolCardProps) {
                         </p>
                       </div>}
                 </div>
-                <div className="dsm-workbuddy-xdpool-usage-actions">
-                  <button
-                    type="button"
-                    className="dsm-btn dsm-btn-outline"
-                    disabled={busy}
-                    onClick={() => { void rescan() }}
-                  >
-                    {busy
-                      ? (t?.('row.accountsScanning') ?? 'Detecting…')
-                      : (t?.('row.accountsRescan') ?? 'Detect accounts again')}
-                  </button>
-                  {cooling > 0
-                    ? <button
-                        type="button"
-                        className="dsm-btn dsm-btn-outline"
-                        disabled={cooldownBusy}
-                        onClick={() => { void resetCooldowns() }}
-                      >
-                        {cooldownBusy
-                          ? (t?.('row.resetCooldownsBusy') ?? 'Clearing…')
-                          : (t?.('row.resetCooldowns') ?? 'Clear all cooldowns')}
-                      </button>
-                    : null}
-                </div>
               </div>
               </section>
 
@@ -1237,7 +1213,9 @@ export function PoolCard({ t, settingsScope }: PoolCardProps) {
                                   ? (t?.('row.skippedEncrypted') ?? 'encrypted — start WorkBuddy once')
                                   : entry.reason === 'unreadable'
                                     ? (t?.('row.skippedUnreadable') ?? 'file could not be read')
-                                    : (t?.('row.skippedMalformed') ?? 'not a credential file')}
+                                    : entry.reason === 'expiredRefresh'
+                                      ? (t?.('row.skippedExpired') ?? 'sign-in expired — sign in again')
+                                      : (t?.('row.skippedMalformed') ?? 'not a credential file')}
                               </span>
                             </p>
                           ))}

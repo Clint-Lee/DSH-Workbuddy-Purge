@@ -119,11 +119,11 @@
 
 > **卡片在哪儿打开**：DSH 设置面板本身。开法是**侧边栏左下角的齿轮**，或者快捷键 `Ctrl+Alt+,`。
 > 面板顶部是平级标签：`通用设置 / 模型 / 内置插件 / Agent 预设 / WorkBuddy 积分池` —— 本插件就是最后那个。
-> （早期版本这里叫「XD Pool」；界面标题现为「WorkBuddy 积分池」，位置不变。）
+> （0.1.x 时代它叫「设置 → 插件 → DSH WorkBuddy XD Pool」这样一层层点进去的独立页，0.2.0 起那层菜单已经找不到；界面标题也从「XD Pool」改成了「WorkBuddy 积分池」，位置不变。）
 
 **方式 A：一键脚本（推荐，适合不熟悉命令行的）**
 
-下载 [dist/DSH-Workbuddy-Purge-v1.9.7.zip](dist/DSH-Workbuddy-Purge-v1.9.7.zip)，
+下载 [dist/DSH-Workbuddy-Purge-v1.9.9.zip](dist/DSH-Workbuddy-Purge-v1.9.9.zip)，
 解压到任意位置，双击 **`一键安装.bat`**，然后完全退出 DSH 再打开。
 
 脚本会建立 junction 链接指向解压目录，所以**以后这个目录不要删除或移动**；
