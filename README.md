@@ -129,7 +129,7 @@
 
 **方式 A：一键脚本（推荐，适合不熟悉命令行的）**
 
-下载 [dist/DSH-Workbuddy-Purge-v1.9.11.zip](dist/DSH-Workbuddy-Purge-v1.9.11.zip)，
+下载 [dist/DSH-Workbuddy-Purge-v1.9.12.zip](dist/DSH-Workbuddy-Purge-v1.9.12.zip)，
 解压到任意位置，双击 **`一键安装.bat`**，然后完全退出 DSH 再打开。
 
 脚本会建立 junction 链接指向解压目录，所以**以后这个目录不要删除或移动**；
@@ -177,6 +177,14 @@ DSH 会用 pnpm 把仓库作为包安装进来。**这种方式装的是快照**
   磁盘上什么都没动，替换途中失败则那个备份目录就是回滚点（只留最新 2 份）。
 
 更新完退出 DSH 再打开 —— 宿主在启动时才会重新加载前端 bundle。
+
+> **如果你装的是 1.9.11，请务必先升到 1.9.12。** 1.9.11 的顶栏标签用
+> `MutationObserver` 盯着 `document.body`，而"把标签摆好"这个动作本身就是一次
+> childList 变动，于是它观察到自己；DSH 流式输出时每个 token 都会重建标签节点，
+> 重排就永远停不下来，渲染主线程被占满 —— 表现是打开 DSH 后界面完全点不动，
+> 只能点标题栏的叉号关掉。1.9.12 把 observer 整个删掉，改成 1 秒轮询 + 节点身份
+> 闸门（稳态下零 DOM 写入），并加了 `tests/update-chip-watchdog.test.ts` 把这条
+> 结构性约束钉死。
 
 > 为什么需要这个按钮：DSH 宿主本身没有插件更新功能（`dsh-plugin-manager` 里只有
 > add / remove，没有 update；设置页 UI 里连「更新」字样都没有）。而从链接装出来的

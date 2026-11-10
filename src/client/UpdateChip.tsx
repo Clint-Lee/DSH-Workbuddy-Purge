@@ -13,12 +13,31 @@
  * `installNavIcon` in `index.tsx` already uses for the Settings nav row. No
  * renderer, no version coupling, and the teardown is a plain remove.
  *
- * ## Why MutationObserver AND an interval
+ * ## Why there is NO MutationObserver here (1.9.12)
  *
- * The tab row does not exist until a conversation renders, and it is re-created
- * whenever the active session changes. The observer catches the usual case; the
- * interval covers the transitions that replace the row without a mutation the
- * observer sees first (React replacing a subtree inside an existing parent).
+ * 1.9.11 watched `document.body` with `{childList: true, subtree: true}` and
+ * re-placed the chip on every mutation. That is a self-feeding loop, and it
+ * shipped a freeze:
+ *
+ *   1. Placing the chip is itself a childList mutation, so the observer callback
+ *      re-triggers the placement code.
+ *   2. The host re-renders the tab row on every streaming token, so `last` is a
+ *      fresh element on the next pass and the chip is moved AGAIN.
+ *   3. DSH streams output continuously, so mutations never stop — and neither
+ *      does the placement work. The renderer's main thread is saturated: the
+ *      window keeps repainting what it already drew, but click handlers never
+ *      run. The only thing still alive is the OS title bar, so the app looks
+ *      completely frozen and closing it is the only way out.
+ *
+ * Throttling that callback does NOT fix it — a throttle only caps the loop's
+ * rate, and any host that re-renders between passes keeps it looping forever.
+ *
+ * So the observer is gone. Placement is driven by a plain interval, and every
+ * pass starts with an O(1) gate: the work happens only when the row element is
+ * a different node than last time, or the chip was detached by the host. In the
+ * steady state a pass is one `isConnected` read and nothing else, and — because
+ * the gate is on identity rather than on mutation events — the placement can
+ * never feed itself.
  *
  * @module dsh-workbuddy-xdpool/client/UpdateChip
  */
@@ -275,6 +294,14 @@ export function mountUpdateChip(options: UpdateChipOptions): () => void {
   let closeDialog: (() => void) | undefined
   let mountedAt = Date.now()
   let warned = false
+  /**
+   * The row node the chip was last placed in.
+   *
+   * This is the whole fix for the 1.9.11 freeze: placement is gated on node
+   * IDENTITY, so a pass that changes nothing writes nothing. Nothing here can
+   * re-enter itself, because no part of this file watches for mutations.
+   */
+  let placedRow: HTMLElement | undefined
   /** Resolved once per page load; the install path does not change at runtime. */
   let about: PoolWebAbout | undefined
 
@@ -282,6 +309,7 @@ export function mountUpdateChip(options: UpdateChipOptions): () => void {
     if (disposed) return
     const row = findTabRow()
     if (row === undefined) {
+      placedRow = undefined
       if (!warned && Date.now() - mountedAt > MISS_WARN_AFTER_MS) {
         warned = true
         console.warn(
@@ -293,6 +321,18 @@ export function mountUpdateChip(options: UpdateChipOptions): () => void {
       }
       return
     }
+
+    // Steady state: same row, chip still attached, still after the last tab.
+    // One query plus a couple of property reads, and — crucially — zero DOM
+    // writes, so this pass cannot cause another pass.
+    const tabs = row.querySelectorAll(":scope > [role='tab']")
+    const last = tabs[tabs.length - 1]
+    const settled = row === placedRow
+      && chip !== undefined
+      && chip.isConnected
+      && (last === undefined ? chip.parentNode === row : chip.previousElementSibling === last)
+    if (settled) return
+
     if (chip === undefined) {
       chip = document.createElement('div')
       chip.className = 'wbxc-chip'
@@ -305,6 +345,7 @@ export function mountUpdateChip(options: UpdateChipOptions): () => void {
       chip.append(button)
     }
     placeChip(row, chip)
+    placedRow = row
   }
 
   const close = (): void => {
@@ -410,19 +451,19 @@ export function mountUpdateChip(options: UpdateChipOptions): () => void {
     void runCheck()
   }
 
-  // Initial placement plus the two watchdogs described in the module docs.
+  // Initial placement, then a plain interval. See the module docs: there is
+  // deliberately NO MutationObserver. Watching document.body and placing the
+  // chip in the same callback is a feedback loop that froze the whole renderer.
   ensureChip()
-  const observer = new MutationObserver(() => { ensureChip() })
-  observer.observe(document.body, { childList: true, subtree: true })
   const timer = setInterval(ensureChip, RESCAN_INTERVAL_MS)
 
   return () => {
     disposed = true
-    observer.disconnect()
     clearInterval(timer)
     close()
     chip?.remove()
     chip = undefined
+    placedRow = undefined
     mountedAt = 0
   }
 }

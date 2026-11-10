@@ -227,6 +227,13 @@ function installNavIcon(ctx: WorkBuddyClientContext, resolveLabel: () => string)
     let disposed = false
     let scheduled = false
     /**
+     * The row element this icon was last applied to.
+     *
+     * Placement is gated on node IDENTITY (see the note on the poll below), so a
+     * pass that changes nothing writes nothing and cannot re-enter itself.
+     */
+    let appliedRow: HTMLElement | undefined
+    /**
      * Consecutive passes that found no matching row.
      *
      * A miss is NORMAL most of the time: the settings dialog is closed, so its
@@ -247,15 +254,30 @@ function installNavIcon(ctx: WorkBuddyClientContext, resolveLabel: () => string)
       if (disposed) return
       const wanted = String(resolveLabel() ?? '').trim()
       if (wanted === '') return
+      // Fast path: the row already carrying the marker is still the wanted one,
+      // so there is nothing to redo. sync() runs on every mutation in the
+      // document, and without this it would re-scan the nav on every streamed
+      // token for no reason.
+      if (
+        appliedRow !== undefined
+        && appliedRow.isConnected
+        && appliedRow.hasAttribute(NAV_ICON_MARKER)
+        && String(appliedRow.textContent ?? '').trim() === wanted
+      ) return
       let matched = 0
-      for (const row of document.querySelectorAll(NAV_ROW_SELECTOR)) {
+      let target: HTMLElement | undefined
+      for (const row of document.querySelectorAll<HTMLElement>(NAV_ROW_SELECTOR)) {
         if (String(row.textContent ?? '').trim() === wanted) {
-          row.setAttribute(NAV_ICON_MARKER, '')
+          target = row
           matched += 1
-        } else {
+          // Idempotent: setting an attribute that is already present is still a
+          // DOM write, so only do it when it is missing.
+          if (!row.hasAttribute(NAV_ICON_MARKER)) row.setAttribute(NAV_ICON_MARKER, '')
+        } else if (row.hasAttribute(NAV_ICON_MARKER)) {
           row.removeAttribute(NAV_ICON_MARKER)
         }
       }
+      appliedRow = target
       if (matched > 0) {
         missStreak = 0
         warned = false
