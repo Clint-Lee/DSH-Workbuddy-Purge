@@ -8,7 +8,15 @@ export const IDENTITY_CARD_PREFIX = "WHO YOU ARE (highest priority";
 export const CWD_ONLY_SUFFIX = "Your working directory is {{cwd}}.";
 export { PHASE1_KEEP_EXPR, widenPhase1KeepFilter } from "./phase1-keep.js";
 
-const DSH_INTERPOLATE_ALLOWED = new Set(["cwd", "model", "provider"]);
+/**
+ * 宿主一定会注册的变量。DSH 0.2.1 起 `dsh-agent-loop` 不再注册 `cwd`
+ * （只留 provider / model），任何带 `{{cwd}}` 的段在 renderPrompt 里都会抛
+ * `unknown prompt variable "{{cwd}}"`，整轮请求直接失败。
+ * 所以 cwd 由我们自己在组装阶段填成字面路径，不再依赖宿主变量。
+ */
+const DSH_NATIVE_VARIABLES = new Set(["model", "provider"]);
+/** 只剩宿主一定注册的两个。`cwd` 由 materializeCwd 自己填，不能留给宿主。 */
+const DSH_INTERPOLATE_ALLOWED = new Set([...DSH_NATIVE_VARIABLES]);
 
 /** 插件自己的段：inject 用 dsh-purge*，cap/卡/角色用 dshpg-* 以免被挪到 inject 前。 */
 export function isPluginPromptSection(name) {
@@ -17,11 +25,14 @@ export function isPluginPromptSection(name) {
 }
 
 /**
- * DSH interpolate 只认 cwd/model/provider。其它 `{{` 会抛 malformed，整段丢掉。
- * 正文不改文件，只在线上把非法 `{{` 拆成 `{ {`。
+ * DSH interpolate 只认宿主注册过的变量。DSH 0.2.1 起只剩 model / provider：
+ * `cwd` 已被移除，留着 `{{cwd}}` 会让 renderPrompt 抛
+ * `unknown prompt variable "{{cwd}}"` 并让整轮失败，所以这里先把 cwd 填成
+ * 字面路径，再把其它 `{{` 拆成 `{ {`（否则会抛 malformed，整段丢掉）。
+ * 正文不改文件，只在线上处理。
  */
-export function escapeDshInterpolation(text) {
-  const src = String(text || "");
+export function escapeDshInterpolation(text, cwd) {
+  const src = materializeCwd(text, cwd);
   if (!src.includes("{{")) return src;
   return src.replace(/\{\{([^{}]*)\}\}|(\{\{)/g, (all, name, open) => {
     if (name !== undefined && DSH_INTERPOLATE_ALLOWED.has(name)) return all;
@@ -33,6 +44,71 @@ export function escapeDshInterpolation(text) {
 const CHATML_LINE = "<|im_start|>system:";
 const PROJECT_OPEN = "<project_instructions>";
 const PROJECT_CLOSE = "</project_instructions>";
+
+/** 这一轮的工作目录：会话头优先，退到进程 cwd。 */
+export function cwdOfContext(context) {
+  const from = (session) => {
+    const value = session?.header?.cwd;
+    return typeof value === "string" ? value.trim() : "";
+  };
+  try {
+    const direct = from(context?.agent?.session) || from(context?.session);
+    if (direct) return direct;
+  } catch { /* 代理层读不到时退到进程目录 */ }
+  try {
+    return String(process.cwd() || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 把 `{{cwd}}` 填成字面路径。填进去的路径若自带 `{{` 会被拆开，避免
+ * renderPrompt 把它当变量再抛 malformed。
+ * 宿主已经不再注册 cwd，所以这一步是必需而不是优化。
+ */
+export function materializeCwd(text, cwd) {
+  const src = String(text ?? "");
+  if (!src.includes("{{cwd}}")) return src;
+  const value = String(cwd ?? "").replace(/\{\{/g, "{ {").trim();
+  return src.split("{{cwd}}").join(value || "[workspace]");
+}
+
+const VARIABLE_TOKEN = /\{\{([^{}]*)\}\}/g;
+
+/** 该宿主这一轮实际注册了哪些变量。拿不到就当作没有。 */
+function registeredVariables(variables) {
+  if (!variables || typeof variables !== "object") return null;
+  try {
+    return new Set(Object.keys(variables));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把这一段里宿主不认识 `{{变量}}` 全部改成字面量。
+ *
+ * 为什么必须做：宿主 renderPrompt 对每个 section 调 interpolate，遇到未注册的
+ * 变量直接 throw，整轮请求失败（同事看到的就是这个）。段是谁写的不重要 ——
+ * 插件的 personaSuffix、别的插件、用户自己写进 prompt-inject.md 的 `{{cwd}}`
+ * 都会把请求打死。所以组装出口统一按宿主真实注册表清洗一遍：
+ *   * `{{cwd}}`：填成本轮工作目录字面值（这个变量 DSH 0.2.1 起没了）；
+ *   * 其它未注册名：拆成 `{ {name}}`，保留可读性又不触发 interpolate。
+ * 注册表拿不到时退回只认 model / provider。
+ */
+export function sanitizeVariablesInText(text, variables, cwd) {
+  const src = String(text ?? "");
+  if (!src.includes("{{")) return src;
+  const registered = registeredVariables(variables) ?? DSH_INTERPOLATE_ALLOWED;
+  const value = String(cwd ?? "").replace(/\{\{/g, "{ {").trim();
+  return src.replace(VARIABLE_TOKEN, (all, name) => {
+    const key = String(name || "").trim();
+    if (registered.has(key)) return all;
+    if (key === "cwd") return value || "[workspace]";
+    return `{ {${name}}}`;
+  });
+}
 
 /**
  * 线上、组装共用：两枚标签都留着。
@@ -924,9 +1000,11 @@ export function rewritePromptAssembly(assembled, fallbackInject = "", options = 
 
   const redteam = isRedteamSession(opts.context) || assemblyLooksRedteam(originalSections);
   const redteamChild = redteam && isRedteamSubagent(opts.context);
+  const cwd = cwdOfContext(opts.context);
   const rawInject = modePromptText(collectInjectText(purge, opts.fallbackInject), redteam);
   const injectText = escapeDshInterpolation(
     peelChatmlEnvelope(adaptInjectForMinimalPreset(withOwnServers(rawInject), opts.context)),
+    cwd,
   );
   const protocol = opts.capabilityProtocol === false
     ? ""
@@ -978,10 +1056,25 @@ export function rewritePromptAssembly(assembled, fallbackInject = "", options = 
       ];
     }
   }
+  // 出口统一清洗：宿主 renderPrompt 遇到未注册变量会直接 throw，整轮失败。
+  // 这里按宿主真实注册表再过一遍，插件自己的段和别人的段一视同仁。
+  const variables = assembled.variables;
+  const finalSections = outSections.map((section) => {
+    if (!section || typeof section.text !== "string") return section;
+    if (section.interpolate === false) return section;
+    const safe = sanitizeVariablesInText(section.text, variables, cwd);
+    return safe === section.text ? section : { ...section, text: safe };
+  });
+  const finalContexts = (Array.isArray(assembled.contexts) ? assembled.contexts : []).map((context) => {
+    if (!context || typeof context.text !== "string") return context;
+    if (context.interpolate === false) return context;
+    const safe = sanitizeVariablesInText(context.text, variables, cwd);
+    return safe === context.text ? context : { ...context, text: safe };
+  });
   return {
     ...assembled,
-    sections: outSections,
-    contexts: Array.isArray(assembled.contexts) ? assembled.contexts : [],
+    sections: finalSections,
+    contexts: finalContexts,
     tools: Array.isArray(assembled.tools) ? assembled.tools : [],
   };
 }

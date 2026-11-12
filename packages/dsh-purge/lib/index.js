@@ -12,6 +12,7 @@ import * as officialUpdate from "./official-update.js";
 import {
   GLOBAL_PROMPT_ORDER,
   adaptInjectForMinimalPreset,
+  cwdOfContext,
   isMnemonPluginMessage,
   isRedteamSession,
   installAssembleGuard,
@@ -386,6 +387,7 @@ export function registerPromptSections(ctx, config) {
       // 标准、极简都注入同一份正文。极简只改工具句，不决定注不注入。
       return escapeDshInterpolation(
         peelChatmlEnvelope(adaptInjectForMinimalPreset(readInjectFallback(context), context)),
+        cwdOfContext(context),
       );
     },
   });

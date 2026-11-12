@@ -28,7 +28,9 @@
   config:
     includeHarnessIdentity: false
     personaPrefix: ""
-    personaSuffix: Your working directory is {{cwd}}.
+    # 不要写 {{cwd}}：DSH 0.2.1 起宿主不再注册 cwd 变量，renderPrompt 会抛
+    # unknown prompt variable 并让整轮请求失败。工作目录由 purge 自己填。
+    personaSuffix: ""
 
 - id: dsh-purge
   inject: [systemPrompt, tools]

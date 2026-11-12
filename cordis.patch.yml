@@ -54,12 +54,16 @@
   name: dsh-redteam-mode/ui
   disabled: true
 
-# ── 破甲：去掉宿主自带人格，只留工作目录一行 ──────────────────────────
+# ── 破甲：去掉宿主自带人格，persona 留空 ──────────────────────────────
+# personaSuffix 不要写 `{{cwd}}`：DSH 0.2.1 起 dsh-agent-loop 不再注册 cwd 变量，
+# 宿主 renderPrompt 遇到未注册变量会抛 `unknown prompt variable "{{cwd}}"`，
+# 整轮请求直接失败（同事机器上就是这条）。工作目录一行由 purge 在组装阶段
+# 自己填成字面路径，见 packages/dsh-purge/lib/identity.js 的 materializeCwd。
 - id: system-prompt
   config:
     includeHarnessIdentity: false
     personaPrefix: ""
-    personaSuffix: Your working directory is {{cwd}}.
+    personaSuffix: ""
 
 - insert:
     # ── 模型池 ────────────────────────────────────────────────────────

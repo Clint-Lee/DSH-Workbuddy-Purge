@@ -25,7 +25,9 @@
 # ── identity ────────────────────────────────────────────────────────────────
 
 # The preset's own persona, shadowing the deployment default for this agent.
-# `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+# `{{model}}` still resolves from the agent's route; `{{cwd}}` does not — DSH
+# 0.2.1 stopped registering that variable, so purge fills the working directory
+# in at assemble time instead of leaving it to the host.
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:

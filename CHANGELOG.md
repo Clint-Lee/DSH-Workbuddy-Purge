@@ -1,3 +1,67 @@
+## 1.9.19 — 新版 DSH 不再报 unknown prompt variable "{{cwd}}"
+
+同事那边装的是较新的 DSH 宿主，不管选哪个 WorkBuddy 模型，每一轮都在开头直接失败：
+
+```
+unknown prompt variable "{{cwd}}" in section "deployment:persona-suffix";
+registered variables: provider, model
+```
+
+本机 DSH 0.2.0-rc.2 一直正常，所以之前没复现出来。
+
+### 根因：宿主把 `cwd` 变量删了，插件还在写 `{{cwd}}`
+
+- `@deepseek-ai/dsh-agent-loop` 从 `0.2.1-alpha.2` 起不再调用
+  `ctx.systemPrompt.variable("cwd", ...)`，变量表只剩 `provider` / `model`。
+  `0.2.0-rc.2` 及更早是三者都注册（本机就是这一档）。
+- `@deepseek-ai/dsh-system-prompt` 的 `interpolate()` 遇到未注册变量不是跳过而是
+  **直接 throw**：`throw new Error(\`unknown prompt variable "{{${name}}}" in ${kind} "${input.name}"; registered variables: ...\`)`。
+  `renderPrompt()` 对每个 section 都跑一遍（`interpolate: false` 的段除外），整轮请求因此挂掉。
+- 我们 bundle 的 `cordis.patch.yml` 里写了
+  `personaSuffix: Your working directory is {{cwd}}.`，段名正是
+  `deployment:persona-suffix` —— 截图里报错的那一段。这段是合并 dsh-purge 破甲时带进来的；
+  参考项目 `XDTrees/dsh-xdpool` 的 `cordis.patch.yml` 全仓没有 `{{cwd}}`，本身不受影响。
+- 只改这一行还不够：`packages/dsh-purge/lib/identity.js` 运行时的
+  `overlayOfficialIdentity()` / `stripHarnessPersona()` 也会把带 `{{cwd}}` 的官方身份句
+  重新塞回 assembly，用户自己的 `prompt-inject.md`、别的插件、宿主旧 preset 同样可能带。
+
+### 修法：两层，且都无条件生效
+
+1. **配置层**：根 `cordis.patch.yml` 与 `packages/dsh-purge/cordis.patch.yml` 的
+   `personaSuffix` 都改成 `""`，不再让宿主插这段。
+2. **组装出口按宿主真实变量表清洗**（`packages/dsh-purge/lib/identity.js`）：
+   `rewritePromptAssembly()` 在返回前，对**所有** sections 与 contexts 走一遍
+   `sanitizeVariablesInText(text, assembled.variables, cwd)`：
+   - 已注册的变量（`{{provider}}`、`{{model}}`）原样保留；
+   - `{{cwd}}` 用 `cwdOfContext(context)` 取到的真实工作目录字面替换
+     （取不到时退 `[workspace]`）；
+   - 其它任何未注册变量改写成 `{ {name}}`，不会变成 live token；
+   - `interpolate: false` 的段宿主本来就不检查，保持不动。
+   `escapeDshInterpolation()` 也改成先物化再拆非法 `{{`。
+   这条路径走 `system-prompt/assemble` 钩子，插件一加载就生效，且
+   `rewriteLiveAssembly()` 在破甲开关关闭时仍然调用它 —— 不依赖「应用补丁」按钮，
+   不依赖用户做任何操作。
+
+没有去给宿主的 `interpolate()` 加降级补丁：`cordis.patch.yml` 里
+`autoApplyOnStart: false`，用户不点 Apply 就不生效，而在新版宿主上 pattern 对不上
+还会挂一条永久 pending —— 那正是要避免的新问题。
+
+### 测试
+
+新增 `tests/purge-cwd-prompt.test.ts` 12 例：物化单次/多次/`[workspace]` 兜底、
+保留 `{{model}}`/`{{provider}}`、未知变量降级、变量表缺失回退、`cwdOfContext` 取值链，
+以及按 0.2.1 形状构造的 assembly（只有 `provider`/`model`）经
+`rewritePromptAssembly()` 后所有段与上下文都不含 `{{cwd}}`、含真实 CWD、不改原对象、
+第三方段同样被清洗。全量 **40 个测试文件 / 466 例通过**，`tsc --noEmit` 干净。
+
+### 升级
+
+完全退出 DSH → 用「立即更新」或重装本版 zip → 重开即可，不用重新登录 WorkBuddy 账号，
+`~/.dsh/.workbuddy-xdpool/accounts.json` 不受影响。0.2.0-rc.2 的老宿主同样兼容
+（`{{cwd}}` 现在被插件自己填成字面路径，不再交给宿主插值）。
+
+---
+
 ## 1.9.18 — 并发扫描不再覆盖 roster，账号离池会留日志
 
 1.9.17 把账号清单落盘之后，还有一条**能把账号从这个清单里弄丢**的路径，这一版堵掉。

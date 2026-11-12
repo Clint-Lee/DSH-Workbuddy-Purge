@@ -145,7 +145,7 @@ purge 的文件本来就在仓库里（`packages/dsh-purge/`），挂载关系�
 
 **方式 B：一键脚本（适合想直接改仓库工作副本的）**
 
-下载 [dist/DSH-Workbuddy-Purge-v1.9.18.zip](dist/DSH-Workbuddy-Purge-v1.9.18.zip)，
+下载 [dist/DSH-Workbuddy-Purge-v1.9.19.zip](dist/DSH-Workbuddy-Purge-v1.9.19.zip)，
 解压到任意位置，双击 **`一键安装.bat`**，然后完全退出 DSH 再打开。
 
 脚本会建立 junction 链接指向解压目录，所以**以后这个目录不要删除或移动**；
@@ -203,7 +203,7 @@ git ls-remote https://github.com/Clint-Lee/DSH-Workbuddy-Purge.git refs/heads/ma
    然后把端口换成你自己代理软件的。配完在 DSH 里重试安装。
    （要撤销：`git config --global --unset http.proxy`）
 2. **没代理就用 zip**：用能打开 GitHub 的设备（手机流量也行）下载
-   [dist/DSH-Workbuddy-Purge-v1.9.18.zip](dist/DSH-Workbuddy-Purge-v1.9.18.zip)，
+   [dist/DSH-Workbuddy-Purge-v1.9.19.zip](dist/DSH-Workbuddy-Purge-v1.9.19.zip)，
    传到这台机器解压，双击 `一键安装.bat`。
 
 > **检查更新 / 立即更新在 1.9.16 起自带镜像回退**：直连 `raw.githubusercontent.com`
