@@ -1,3 +1,93 @@
+## 1.9.18 — 并发扫描不再覆盖 roster，账号离池会留日志
+
+1.9.17 把账号清单落盘之后，还有一条**能把账号从这个清单里弄丢**的路径，这一版堵掉。
+
+### 问题：`scan()` 可以被同时跑两份
+
+触发扫描的地方不止一处：卡片每轮轮询状态（`src/web-status.ts:636`）、启动时拉模型目录
+（`src/index.ts:602`）、再拉一次目录（`src/index.ts:1199`）、取消忽略后（`src/index.ts:1021`）、
+手动「重新检测」（`src/index.ts:1052`），还有 `acquire()` 发现池里没有可用账号时
+（`src/accounts.ts` 内两处 `await this.scan()`）。同一时刻进来两个扫描时，两者都各自在
+**开始时**读 roster，各自合并、各自写回：慢的那个写完，就用自己那份更旧的画面覆盖掉
+快的那个刚写进去的账号——而之后每一次扫描都会从这份更短的清单读起，账号就永久没了。
+
+### 修法
+
+- **`scan()` 改为 single-flight**：正在跑的时候，后来的调用直接 `await` 同一个 Promise，
+  一段时间内只有一次真正的扫描。是消除交叠，而不是去调和两次写入。
+  失败时也会清掉 in-flight 标记，一次坏扫描不会把后续每次扫描都堵住。
+  实现上是公开的 `scan()` 只做去重包装，真正的逻辑搬到私有 `scanOnce()`。
+- **roster 缩水会点名打日志**：
+  `dsh-workbuddy-xdpool: N account(s) left the pool and were removed from the roster: <ids>. An account only leaves when it is ignored or its refresh window has closed.`
+  缩水本身是合法的（用户点了「移出池子」，或者该账号 refresh 窗口已经关闭），但它和当初
+  那个 bug 的表现完全一致；留一行日志，下次再有人说「又少了一个号」，看日志就能分清是
+  策略还是缺陷。
+
+### 测试
+
+`tests/account-store.test.ts` 增加 3 个用例（共 15 例）：并发四连 `scan()` 拿到的是同一次
+运行的结果、「磁盘只剩当前登录账号」时连发扫描后 roster 里仍然是两个账号、以及把账号
+移出池子后必须点名报告离开的 id。全量 39 个测试文件 / 454 例通过。
+
+---
+
+## 1.9.17 — 账号清单落盘：第二天重启不再丢号
+
+朋友那边复现得很稳定：同一台机器登录两个 WorkBuddy 账号，第一天池里两个都在，
+自动签到也跑得动；**第二天再打开 DSH 只剩一个账号，另一个要重新登录**。卸载重装、
+重新登两个号，第三天照样掉一个。
+
+### 根因：池里只持久化了 token，没有持久化「账号清单」
+
+WorkBuddy 桌面端在 `…/CodeBuddyExtension/Data/Public/auth/` 下只保留**当前登录**那个
+`workbuddy-desktop.info`，切换登录时旧账号被写成时间戳快照，之后随时可能被清掉。
+插件这边的 `scan()` 每次都只从这些文件里重新发现账号，而唯一写盘的东西是
+`refreshed/<id>.info`——它只在 **refresh token 成功续期之后**才落盘。
+
+于是没被续期过的账号（比如当天只是登录进池、还没轮到它跑任务的那个）**只活在内存里**，
+DSH 一重启就消失。本机能一直看到两个号，纯粹是因为这台机器的 auth 目录里恰好还留着
+另一个账号的历史快照文件；新装的机器没这些快照，第二天必掉。跟我们自己的 token 有效期
+无关（实测那几个 `refreshExpires` 都在 2027 年，第二天远没到期）。
+
+### 修法：`$DSH_HOME/.workbuddy-xdpool/accounts.json` 记一份账号清单
+
+新增 `src/account-store.ts`，`scan()` 每次扫完把整池（连凭据）写进 roster，扫之前再从
+roster 把磁盘上已经没有的账号**召回**：
+
+- **召回不设「池子为空才召回」的门控**。参考实现踩过这个坑：只要还有一个 `.info` 在，
+  这种"部分账号有文件、部分没有"的**正常状态**就会跳过 roster，然后拿这次扫到的子集
+  覆盖写回，没有文件的那个账号被从磁盘上抹掉（对应上游 issue #117，6 账号池丢了
+  2299 积分的最高余额账号）。
+- **roster 里的副本永远比不过磁盘上的真文件**。召回项的 `sourcePath` 指向 roster 自身，
+  `compareFreshness` 里加了一条最高优先级的判定：来源是 roster 的一律排在真实 auth 文件
+  之后。所以重新登录拿到的新 token 一定赢，不会被旧副本按回去。
+- **过期的副本不再召回**：`isRosterEntryUsable()` 要求 access token 没过期，或者
+  refresh 窗口还开着；两个都过期就丢掉这一条，而不是让池里挂个必然 401 的死号。
+- **无变化不写盘**：`rosterSignature()` 对比 id/label/accessToken/refreshToken/expiresAt/
+  lastRefreshAt，两次扫描结果一样就跳过写入（实测第二次启动 roster 字节数不变），
+  不会在每次 `scan()` 都触发一次磁盘写。
+- 坏 JSON、缺字段、非数组一律降级成空清单并从下一次扫描自愈；被「移出池子」（ignored）
+  的账号不会被 roster 复活。
+
+CLI 和网页卡片看的是同一份 roster（`createCore()` 传 `persistent: true`），
+所以 `dsh-workbuddy-xdpool status` 里也能看到已经不在磁盘上的老账号。
+
+> 这个文件里存的是 token 明文，和 `refreshed/<id>.info` 一直以来的做法一致 ——
+> 都在 `%USERPROFILE%\.dsh\.workbuddy-xdpool\` 下，属于当前用户的私有目录。
+> 桌面端的 `.info` 从 5.6.0 起是加密的，但插件要能在重启后还原账号，就必须持有
+> 可用的凭据；删掉这个目录只会让下次启动少召回几个账号，不影响桌面端登录。
+
+### 测试
+
+新增 `tests/account-store.test.ts`（12 例），钉住了六条契约：没有 `.info` 的账号跨重启
+仍在、只扫到 live 文件时 roster 不缩水、roster 不压过磁盘凭据、坏 roster 降级为空、
+ignored 不复活、双窗口都过期的条目被丢弃。全量 39 个测试文件 / 451 例通过。
+
+> **升级后要完全退出 DSH 再打开**（不是关窗口，是退出进程）。第一次启动会把现有账号
+> 写进 `~/.dsh/.workbuddy-xdpool/accounts.json`，之后每次启动都从这份清单补齐。
+
+---
+
 ## 1.9.16 — GitHub 连不上时，「检查更新」走镜像重试
 
 朋友的机器上 `pnpm add https://github.com/...` 直接报了

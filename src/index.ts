@@ -490,7 +490,19 @@ export function setApi(next: WorkBuddyPoolApi | undefined): void {
  */
 export function createCore(logger?: { warn(...args: unknown[]): void; info?(...args: unknown[]): void }) {
   const client = new WorkBuddyUpstreamClient()
-  const pool = new WorkBuddyAccountPool({ ...logger === undefined ? {} : { logger }, client })
+  // `persistent: true` is the production behaviour, and the reason a two-account
+  // pool survives a restart: the desktop app keeps only the CURRENT sign-in's
+  // `.info` on disk, so every account collected by switching sign-ins used to
+  // evaporate on the next launch — the pool came back with one account and the
+  // other had to be signed in again (which overwrote the first, and so on).
+  // `scan()` now seeds from `$DSH_HOME/.workbuddy-xdpool/accounts.json` and
+  // writes the merged list back. The CLI shares this path on purpose: `status`
+  // and `checkin` must see the same accounts the card does.
+  const pool = new WorkBuddyAccountPool({
+    ...logger === undefined ? {} : { logger },
+    client,
+    persistent: true,
+  })
   const catalogs = {
     cn: new WorkBuddyCatalog(),
     global: new WorkBuddyCatalog(),

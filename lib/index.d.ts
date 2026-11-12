@@ -928,6 +928,19 @@ interface AccountPoolOptions {
    *   behaves like `priority`.
    */
   distribution?: AccountDistribution;
+  /**
+   * Remember discovered accounts across host restarts.
+   *
+   * Defaults to ON whenever the pool uses the machine's real auth directories
+   * (i.e. no explicit `authDirs`), and OFF for an explicitly pointed pool so a
+   * test never writes the user's roster. See `account-store.ts` for why the
+   * roster is needed at all: the desktop app keeps only the CURRENT sign-in on
+   * disk, so without it a two-account pool came back as one account after every
+   * restart.
+   */
+  persistent?: boolean;
+  /** Override the roster path (tests). Defaults to `accountStorePath()`. */
+  storePath?: string;
 }
 export declare class WorkBuddyAccountPool {
   private readonly logger;
@@ -940,6 +953,23 @@ export declare class WorkBuddyAccountPool {
    * touch the real plugin data directory.
    */
   private refreshedDir;
+  /**
+   * Whether discovered accounts are remembered across restarts.
+   *
+   * The desktop app keeps ONE sign-in on disk (each login overwrites the live
+   * file), so a pool of two accounts used to come back from a restart as one and
+   * the other had to be signed in again. With this on, {@link scan} seeds from
+   * the roster and writes the merged list back after every scan that changed it.
+   *
+   * On by default for a pool bound to the machine's real auth directories, off
+   * for one pointed at explicit directories (tests, alternate installs) — those
+   * must never read or write the user's plugin state.
+   */
+  private readonly persistent;
+  /** Path of the durable roster; meaningful only when {@link persistent}. */
+  private readonly storePath;
+  /** Fingerprint of the roster as last written, so unchanged scans skip the write. */
+  private lastRosterSignature;
   private cooldownMs;
   /**
    * How long an account stays out of rotation after the upstream reports its
@@ -1042,6 +1072,21 @@ export declare class WorkBuddyAccountPool {
    */
   private lastUsedAt;
   private refreshInflight;
+  /**
+   * The scan currently running, if any. Scans are event-driven and several
+   * triggers can fire in the same tick; see {@link scan} for why two overlapping
+   * passes are worse than a shared one.
+   */
+  private scanInflight;
+  /**
+   * Account ids the roster held after the last successful write.
+   *
+   * Only used to report a shrinking roster: the bug this store exists for was
+   * silent, so a later "it happened again" report needs a log line saying which
+   * account left and therefore whether the removal was policy (ignored, expired)
+   * or a defect.
+   */
+  private lastRosterIds;
   constructor(options?: AccountPoolOptions);
   /**
    * Re-apply configuration that only affects discovery and cooldown policy,
@@ -1078,8 +1123,36 @@ export declare class WorkBuddyAccountPool {
    * instead of silently showing half a pool.
    */
   skippedFilesInOrder(): readonly WorkBuddySkippedFile[];
-  /** Rescan the auth directories and merge newly discovered accounts. */
+  /**
+   * Rescan the auth directories and merge newly discovered accounts.
+   *
+   * Single-flight: concurrent callers share one run.
+   *
+   * Scans are triggered from several places at once — the card's status refresh,
+   * the startup catalog seed, and `acquire()` whenever the pool looks empty — so
+   * two of them really can overlap. Overlapping runs are not merely wasteful, they
+   * are the one way the durable roster can LOSE an account: both read the store at
+   * their own start, and the slower one then writes back the older picture it
+   * built, deleting the account the faster one had just added and persisted. Every
+   * later scan would then re-read that shortened roster. Sharing a single run
+   * removes the interleaving rather than trying to reconcile two writes.
+   */
   scan(): Promise<WorkBuddyAccount[]>;
+  /** One discovery pass; {@link scan} makes sure only one runs at a time. */
+  private scanOnce;
+  /**
+   * Write the merged roster back.
+   *
+   * Called at the end of every {@link scan}, after `applyIgnored` and every merge
+   * has settled, so what lands on disk is exactly what the pool holds — an
+   * ignored account is never written back, and a credential this scan read from
+   * disk replaces the stored copy.
+   *
+   * Best effort throughout: a read-only or full disk must not fail a scan. The
+   * roster is a convenience for the NEXT process; this one already has the
+   * accounts in memory.
+   */
+  private persistRoster;
   /** All accounts, cooldown state included. */
   list(region?: WorkBuddyRegion): readonly WorkBuddyAccount[];
   /**

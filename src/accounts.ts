@@ -27,6 +27,15 @@ import {
   refreshedDir as refreshedStoreDir,
   writeRefreshedCredentialAt,
 } from './refreshed-store.ts'
+import {
+  ACCOUNTS_FILE_NAME,
+  accountStorePath as defaultAccountStorePath,
+  isRosterEntryUsable,
+  loadStoredAccounts,
+  rosterSignature,
+  saveStoredAccounts,
+  storedCredential,
+} from './account-store.ts'
 
 /** Minimal upstream surface the pool needs to refresh a token (no circular import). */
 export interface TokenRefresher {
@@ -379,10 +388,27 @@ function isRefreshedAuthFile(path: string): boolean {
 }
 
 /**
+ * True when the credential came out of the pool's own roster, not a file the
+ * desktop app or a refresh wrote.
+ *
+ * The roster is a memory of what WORKED, and it is seeded only for accounts the
+ * app no longer keeps a file for. Any credential physically present on disk is
+ * therefore newer knowledge by definition — a fresh sign-in, a snapshot the app
+ * just wrote, a token we refreshed a minute ago. Ranking disk above the roster
+ * unconditionally is what makes "sign in again" win even when the stored copy
+ * carries a later-looking issue time or expiry.
+ */
+function isRosterAuthFile(path: string): boolean {
+  return basename(path) === ACCOUNTS_FILE_NAME
+}
+
+/**
  * Which of two credentials for the same account the pool should keep.
  *
  * Ordering, highest first:
  *
+ * 0. anything read from disk outranks a copy recalled from the roster — the
+ *    roster exists only for accounts the app no longer has a file for;
  * 1. the credential the upstream issued most recently (`lastRefreshAtMs`);
  * 2. the live file the desktop app is signed in with;
  * 3. the longer stored expiry, as a fallback for documents that carry no issue
@@ -408,6 +434,12 @@ function compareFreshness(a: WorkBuddyCredential, b: WorkBuddyCredential): numbe
   const bLive = isLiveAuthFile(b.sourcePath) ? 1 : 0
   const aRefreshed = isRefreshedAuthFile(a.sourcePath) ? 1 : 0
   const bRefreshed = isRefreshedAuthFile(b.sourcePath) ? 1 : 0
+  // A recalled copy is the pool's own memory, not evidence: seen anywhere on disk
+  // beats remembered. Checked before every other term so no stamped issue time or
+  // padded expiry can keep a stale recall in front of a real sign-in.
+  const aRoster = isRosterAuthFile(a.sourcePath) ? 1 : 0
+  const bRoster = isRosterAuthFile(b.sourcePath) ? 1 : 0
+  if (aRoster !== bRoster) return aRoster - bRoster
 
   const aIssued = a.lastRefreshAtMs ?? 0
   const bIssued = b.lastRefreshAtMs ?? 0
@@ -701,6 +733,19 @@ export interface AccountPoolOptions {
    *   behaves like `priority`.
    */
   distribution?: AccountDistribution
+  /**
+   * Remember discovered accounts across host restarts.
+   *
+   * Defaults to ON whenever the pool uses the machine's real auth directories
+   * (i.e. no explicit `authDirs`), and OFF for an explicitly pointed pool so a
+   * test never writes the user's roster. See `account-store.ts` for why the
+   * roster is needed at all: the desktop app keeps only the CURRENT sign-in on
+   * disk, so without it a two-account pool came back as one account after every
+   * restart.
+   */
+  persistent?: boolean
+  /** Override the roster path (tests). Defaults to `accountStorePath()`. */
+  storePath?: string
 }
 
 /**
@@ -771,6 +816,23 @@ export class WorkBuddyAccountPool {
    * touch the real plugin data directory.
    */
   private refreshedDir: string | undefined
+  /**
+   * Whether discovered accounts are remembered across restarts.
+   *
+   * The desktop app keeps ONE sign-in on disk (each login overwrites the live
+   * file), so a pool of two accounts used to come back from a restart as one and
+   * the other had to be signed in again. With this on, {@link scan} seeds from
+   * the roster and writes the merged list back after every scan that changed it.
+   *
+   * On by default for a pool bound to the machine's real auth directories, off
+   * for one pointed at explicit directories (tests, alternate installs) — those
+   * must never read or write the user's plugin state.
+   */
+  private readonly persistent: boolean
+  /** Path of the durable roster; meaningful only when {@link persistent}. */
+  private readonly storePath: string
+  /** Fingerprint of the roster as last written, so unchanged scans skip the write. */
+  private lastRosterSignature: string | undefined
   private cooldownMs: number
   /**
    * How long an account stays out of rotation after the upstream reports its
@@ -873,6 +935,21 @@ export class WorkBuddyAccountPool {
    */
   private lastUsedAt = new Map<string, number>()
   private refreshInflight = new Map<string, Promise<boolean>>()
+  /**
+   * The scan currently running, if any. Scans are event-driven and several
+   * triggers can fire in the same tick; see {@link scan} for why two overlapping
+   * passes are worse than a shared one.
+   */
+  private scanInflight: Promise<WorkBuddyAccount[]> | undefined
+  /**
+   * Account ids the roster held after the last successful write.
+   *
+   * Only used to report a shrinking roster: the bug this store exists for was
+   * silent, so a later "it happened again" report needs a log line saying which
+   * account left and therefore whether the removal was policy (ignored, expired)
+   * or a defect.
+   */
+  private lastRosterIds: Set<string> | undefined
 
   constructor(options: AccountPoolOptions = {}) {
     this.logger = options.logger
@@ -882,6 +959,11 @@ export class WorkBuddyAccountPool {
     // the default store, which is what makes a refresh survive a restart.
     this.refreshedDir = options.refreshedDir
       ?? (options.authDirs === undefined ? defaultRefreshedDir() : undefined)
+    // Same rule as the refreshed store: the real machine's pool remembers its
+    // accounts, an explicitly pointed one keeps everything in memory.
+    this.persistent = options.persistent
+      ?? (options.authDirs === undefined && options.refreshedDir === undefined)
+    this.storePath = options.storePath ?? defaultAccountStorePath()
     this.cooldownMs = options.cooldownMs ?? 60_000
     this.exhaustCooldownMs = options.exhaustCooldownMs ?? EXHAUST_COOLDOWN_MS
     this.credentialDeadCooldownMs = options.credentialDeadCooldownMs ?? CREDENTIAL_DEAD_COOLDOWN_MS
@@ -960,8 +1042,35 @@ export class WorkBuddyAccountPool {
     return this.skippedFiles
   }
 
-  /** Rescan the auth directories and merge newly discovered accounts. */
+  /**
+   * Rescan the auth directories and merge newly discovered accounts.
+   *
+   * Single-flight: concurrent callers share one run.
+   *
+   * Scans are triggered from several places at once — the card's status refresh,
+   * the startup catalog seed, and `acquire()` whenever the pool looks empty — so
+   * two of them really can overlap. Overlapping runs are not merely wasteful, they
+   * are the one way the durable roster can LOSE an account: both read the store at
+   * their own start, and the slower one then writes back the older picture it
+   * built, deleting the account the faster one had just added and persisted. Every
+   * later scan would then re-read that shortened roster. Sharing a single run
+   * removes the interleaving rather than trying to reconcile two writes.
+   */
   async scan(): Promise<WorkBuddyAccount[]> {
+    const inflight = this.scanInflight
+    if (inflight !== undefined) return inflight
+    const run = this.scanOnce()
+    this.scanInflight = run
+    try {
+      return await run
+    } finally {
+      // Cleared even on failure, so one broken scan cannot wedge every later one.
+      if (this.scanInflight === run) this.scanInflight = undefined
+    }
+  }
+
+  /** One discovery pass; {@link scan} makes sure only one runs at a time. */
+  private async scanOnce(): Promise<WorkBuddyAccount[]> {
     const found: WorkBuddyCredential[] = []
     const skipped: WorkBuddySkippedFile[] = []
     const scanDirs = this.refreshedDir === undefined
@@ -1032,6 +1141,41 @@ export class WorkBuddyAccountPool {
     // Seed with existing accounts so cooldown state survives a rescan.
     for (const account of this.accounts) byId.set(account.id, account)
 
+    // Seed from the durable roster so accounts discovered by an EARLIER process
+    // come back. This is the whole point of the roster: the desktop app keeps
+    // only the current sign-in's `.info`, so "one of my two accounts has no file
+    // on disk any more" is the normal state after signing into the second one,
+    // and without this a restart quietly halved the pool.
+    //
+    // Deliberately NOT gated on `byId.size === 0`: that gate is exactly what
+    // makes the store useless in the one case it exists for — a scan that finds
+    // ONE account would then skip the roster and write its single entry back over
+    // it, deleting every account the app no longer had a file for. The loop is
+    // already safe without a gate: a stored entry can only ADD an account, never
+    // replace the credential this scan just read from disk.
+    if (this.persistent) {
+      const now = Date.now()
+      // `loadStoredAccounts` never throws — a missing or corrupt roster reads as
+      // "remember nothing" — so there is no failure path to guard here.
+      for (const entry of await loadStoredAccounts(this.storePath)) {
+        if (this.ignoredIds.size > 0 && this.ignoredIds.has(entry.id)) continue
+        if (byId.has(entry.id)) continue
+        const credential = storedCredential(entry, this.storePath)
+        // A roster entry whose access AND refresh windows both closed cannot do
+        // anything but fail. Dropping it here is what lets the roster self-clean
+        // instead of growing a row per abandoned sign-in forever.
+        if (!isRosterEntryUsable(credential, now)) continue
+        byId.set(entry.id, {
+          id: entry.id,
+          label: entry.label,
+          credential,
+          cooldownUntilMs: 0,
+          modelCooldowns: {},
+          rateLimitHits: 0,
+        })
+      }
+    }
+
     for (const credential of found) {
       const id = workbuddyAccountId(credential)
       const existing = byId.get(id)
@@ -1072,7 +1216,53 @@ export class WorkBuddyAccountPool {
     ordered.sort((a, b) => compareFreshness(a.credential, b.credential))
     this.accounts = ordered
     this.lastScanAtMs = Date.now()
+    await this.persistRoster()
     return this.accounts
+  }
+
+  /**
+   * Write the merged roster back.
+   *
+   * Called at the end of every {@link scan}, after `applyIgnored` and every merge
+   * has settled, so what lands on disk is exactly what the pool holds — an
+   * ignored account is never written back, and a credential this scan read from
+   * disk replaces the stored copy.
+   *
+   * Best effort throughout: a read-only or full disk must not fail a scan. The
+   * roster is a convenience for the NEXT process; this one already has the
+   * accounts in memory.
+   */
+  private async persistRoster(): Promise<void> {
+    if (!this.persistent) return
+    const signature = rosterSignature(this.accounts)
+    // Scans are event-driven (card refresh, login, first use) and most of them
+    // learn nothing, so only a real change pays for the write.
+    if (signature === this.lastRosterSignature) return
+    // Say it out loud when the roster shrinks.
+    //
+    // Shrinking is legitimate (an account was thrown out of the pool, or its
+    // refresh window closed) but it is also the shape of the original bug, so a
+    // silent loss is indistinguishable from the failure the roster exists to
+    // prevent. One log line turns "my second account vanished again" into
+    // something diagnosable after the fact.
+    const previous = this.lastRosterIds
+    if (previous !== undefined) {
+      const leaving = [...previous].filter(id => !this.accounts.some(account => account.id === id))
+      if (leaving.length > 0) {
+        this.logger?.warn?.(
+          `dsh-workbuddy-xdpool: ${leaving.length} account(s) left the pool and were removed from the roster: `
+          + `${leaving.join(', ')}. An account only leaves when it is ignored or its refresh window has closed.`,
+        )
+      }
+    }
+    try {
+      await saveStoredAccounts(this.storePath, this.accounts)
+      this.lastRosterSignature = signature
+      this.lastRosterIds = new Set(this.accounts.map(account => account.id))
+    } catch (error: unknown) {
+      // Keep the previous signature so the next scan retries the write.
+      this.logger?.warn?.('dsh-workbuddy-xdpool: could not persist the account roster', error)
+    }
   }
 
   /** All accounts, cooldown state included. */
