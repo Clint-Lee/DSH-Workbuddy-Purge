@@ -1,3 +1,43 @@
+## 1.9.20 — Hy4 保存后立刻出现在模型选择器，dist 增加 Linux 一键安装
+
+### 这次修的是什么
+
+截图里的现象：插件设置里 **Hy4 / `hy4free` 已经勾选并保存（已启用 4 / 16）**，
+但对话的模型选择器里只有 WorkBuddy XD Pool（国内版 / 国际版）下的
+DeepSeek-V4.1-Flash、GLM-5.3、GLM-5.3-Flash，没有 Hy4。
+
+三个原因叠在一起：
+
+1. **宿主按 provider 缓存模型列表。** `applyConfigFromSource()` 只更新了插件自己的
+   `WorkBuddyCatalog`，没有让两个 adapter 的 profile 失效；宿主下一次问
+   `listModels(provider)` 时仍返回旧列表。现在保存配置时直接
+   `invalidateCatalog()`，下一次打开选择器就是新列表，不用重启 DSH。
+2. **双区选择不同步。** 设置卡片按 CN / 国际版分 tab，而 DSH 选择器会分别问
+   `workbuddy-xdpool` 与 `workbuddy-xdpool-global`。保存当前 tab 时现在同时把
+   同一份 `enabledModelIds / imageModelIds / contextBudgets` 镜像到另一个区，
+   避免一个 provider 仍停留在旧选择上。
+3. **离线兜底表缺少真实网关 id。** 网关给的是 `hy4free`，内置表原来只有
+   `hy4-preview`。首次拉模型表失败 / 尚未拉到时，已勾选的 `hy4free` 会被过滤掉。
+   现在静态表补上 `Hy4 / hy4free`（960K 上下文、64K 输出、免费），并在卡片上
+   标明当前使用的是内置列表。
+
+### 分发包
+
+- Windows 一键 zip 更新到 `dist/DSH-Workbuddy-Purge-v1.9.20.zip`。
+- 新增 Linux / macOS 一键安装：`dist/DSH-Workbuddy-Purge-v1.9.20-linux.sh`，
+  自解压后执行 `bash install-linux.sh` 即可；脚本也会放进 Windows zip，
+  方便一份包覆盖两种系统。
+- `install-linux.sh` 用 symlink 替代 Windows junction，注册 profile 依赖与
+  bundles，回读校验 JSON（无 BOM），并清理历史独立 `dsh-purge` Loader 条目。
+
+### 验证
+
+- `pnpm run build`（Node 22）：`lib/client.js`、`lib/index.js`、`lib/bin.js`、
+  `lib/index.d.ts` 全部重建。
+- `pnpm exec tsc -p tsconfig.json --noEmit` / `pnpm exec tsc -p tsconfig.client.json --noEmit`：通过。
+- `pnpm exec vitest run --reporter=dot`：40 个测试文件 / 468 个用例通过。
+- Windows zip、Linux 自解压包均包含修复后的 `lib/client.js` 与 `lib/index.js`。
+
 ## 1.9.19 — 新版 DSH 不再报 unknown prompt variable "{{cwd}}"
 
 同事那边装的是较新的 DSH 宿主，不管选哪个 WorkBuddy 模型，每一轮都在开头直接失败：

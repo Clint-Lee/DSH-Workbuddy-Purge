@@ -28,7 +28,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { WorkBuddyAccountPool } from '../src/accounts.ts'
-import { WorkBuddyCatalog } from '../src/catalog.ts'
+import { FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from '../src/catalog.ts'
 import { WorkBuddyScheduler } from '../src/scheduler.ts'
 import { DEFAULT_AUTOMATION_HOURS } from '../src/status-paths.ts'
 import {
@@ -188,6 +188,22 @@ describe('#17b a missing selection must not widen to "everything"', () => {
     // legacy keys are unset) is what turned a lost list into a full one.
     expect(hostSource).toContain('fallbackSelection')
     expect(hostSource).toContain('currentSelection()')
+    // A saved selection must also invalidate the host's cached adapter models;
+    // otherwise the catalog changes but the picker keeps the previous list.
+    expect(hostSource).toContain('invalidateCatalog()')
+  })
+
+  it('the card mirrors a saved model list to both provider regions', async () => {
+    const cardSource = await readFile(new URL('../src/client/PoolCard.tsx', import.meta.url), 'utf8')
+    expect(cardSource).toContain("const otherKey = otherRegion === 'cn' ? 'modelSelectionCn' : 'modelSelectionGlobal'")
+    expect(cardSource).toContain("await write.call(settingsScope, otherKey, { enabledModelIds, imageModelIds, contextBudgets })")
+  })
+
+  it('the built-in roster contains the live free Hy4 id', () => {
+    // Offline/fallback startup must still expose the same id the live gateway
+    // advertises; otherwise a checked Hy4 disappears from the picker until the
+    // first successful upstream catalog fetch.
+    expect(FALLBACK_WORKBUDDY_MODELS.some(model => model.id === 'hy4free')).toBe(true)
   })
 
   it('an empty selection object means "everything", which is why it must not be a fallback', () => {

@@ -145,12 +145,27 @@ purge 的文件本来就在仓库里（`packages/dsh-purge/`），挂载关系�
 
 **方式 B：一键脚本（适合想直接改仓库工作副本的）**
 
-下载 [dist/DSH-Workbuddy-Purge-v1.9.19.zip](dist/DSH-Workbuddy-Purge-v1.9.19.zip)，
+下载 [dist/DSH-Workbuddy-Purge-v1.9.20.zip](dist/DSH-Workbuddy-Purge-v1.9.20.zip)，
 解压到任意位置，双击 **`一键安装.bat`**，然后完全退出 DSH 再打开。
 
 脚本会建立 junction 链接指向解压目录，所以**以后这个目录不要删除或移动**；
 仓库更新时只要重新解压覆盖并再跑一次脚本即可。这种方式下更新按钮走 `git pull`，
 前提是那个目录本身是个 git 工作副本；否则仍走文件覆盖。
+
+**Linux / macOS 一键安装**
+
+下载 [dist/DSH-Workbuddy-Purge-v1.9.20-linux.sh](dist/DSH-Workbuddy-Purge-v1.9.20-linux.sh)，
+在终端执行：
+
+```bash
+bash DSH-Workbuddy-Purge-v1.9.20-linux.sh
+```
+
+这个自解压包会把完整插件释放到
+`~/.dsh/plugin-packages/DSH-Workbuddy-Purge-v1.9.20`，再自动执行 `install-linux.sh`；
+脚本用 symlink 替代 Windows junction，注册 profile 依赖与 bundles，回读校验 JSON，
+并清理旧的独立 `dsh-purge` 条目。Windows zip 里也附带同一个 `install-linux.sh`，
+把 zip 完整解压后在该目录执行 `bash install-linux.sh` 效果一样。安装完完全退出 DSH 再打开。
 
 **两种方式可以互相切换**
 
@@ -202,9 +217,11 @@ git ls-remote https://github.com/Clint-Lee/DSH-Workbuddy-Purge.git refs/heads/ma
    ```
    然后把端口换成你自己代理软件的。配完在 DSH 里重试安装。
    （要撤销：`git config --global --unset http.proxy`）
-2. **没代理就用 zip**：用能打开 GitHub 的设备（手机流量也行）下载
-   [dist/DSH-Workbuddy-Purge-v1.9.19.zip](dist/DSH-Workbuddy-Purge-v1.9.19.zip)，
-   传到这台机器解压，双击 `一键安装.bat`。
+2. **没代理就用离线包**：用能打开 GitHub 的设备（手机流量也行）下载
+   [dist/DSH-Workbuddy-Purge-v1.9.20.zip](dist/DSH-Workbuddy-Purge-v1.9.20.zip)
+   或 [dist/DSH-Workbuddy-Purge-v1.9.20-linux.sh](dist/DSH-Workbuddy-Purge-v1.9.20-linux.sh)，
+   Windows 传 zip 后解压双击 `一键安装.bat`；Linux / macOS 传 `.sh` 后执行
+   `bash DSH-Workbuddy-Purge-v1.9.20-linux.sh`。
 
 > **检查更新 / 立即更新在 1.9.16 起自带镜像回退**：直连 `raw.githubusercontent.com`
 > 和 `codeload.github.com` 失败时会自动改走 `gh-proxy.com` / `ghproxy.net` 重试，

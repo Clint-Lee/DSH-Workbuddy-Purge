@@ -853,11 +853,32 @@ export function PoolCard({ t, settingsScope }: PoolCardProps) {
       for (const [id, entry] of Object.entries(draft)) {
         if (entry.budget !== undefined) contextBudgets[id] = entry.budget
       }
-      // One key per region: saving this tab must not rewrite the other tab's list.
+      // One key per region: saving this tab rewrites only this tab's list.
       const key = activeRegion === 'cn' ? 'modelSelectionCn' : 'modelSelectionGlobal'
       await write.call(settingsScope, key, { enabledModelIds, imageModelIds, contextBudgets })
+      // The provider's picker is NOT per-tab: DSH holds one model list per
+      // provider, so the model the user saves here has to be offered by both
+      // provider ids. A CN-only install may still have the host interrogate the
+      // global provider, whose catalog would stay on its previous selection and
+      // omit a newly ticked CN-only id such as `hy4free`. Mirroring this tab's
+      // selection to the other region is what makes "tick Hy4 → save → picker
+      // shows Hy4" deterministic on every host/profile shape. The active tab's
+      // key above is the authoritative write; the mirror below is best effort.
+      const otherRegion: PoolRegion = activeRegion === 'cn' ? 'global' : 'cn'
+      const otherKey = otherRegion === 'cn' ? 'modelSelectionCn' : 'modelSelectionGlobal'
+      try {
+        await write.call(settingsScope, otherKey, { enabledModelIds, imageModelIds, contextBudgets })
+      } catch {
+        // The other region's key is a convenience, never the promise: this
+        // tab's own save already succeeded, so a failure here must not turn
+        // a successful save into an error banner.
+      }
       setDraft(undefined)
       if (mounted.current) setFlash(t?.('row.modelsSaved') ?? 'Saved')
+      // Re-read both regions so the other tab reflects what was just written
+      // instead of waiting a full poll interval to say so.
+      await refresh(activeRegion)
+      await refresh(otherRegion)
     } catch (cause: unknown) {
       if (mounted.current) {
         setError(t?.('row.modelsSaveError', { message: cause instanceof Error ? cause.message : String(cause) })
@@ -1305,6 +1326,8 @@ export function PoolCard({ t, settingsScope }: PoolCardProps) {
                             enabled: enabledCount,
                             total: status?.models.length ?? 0,
                           }) ?? `${enabledCount} / ${status?.models.length ?? 0} enabled`}
+                          {status?.catalogSource !== 'fallback' ? null
+                            : ` · ${t?.('row.modelsFallbackHint') ?? 'built-in list: the gateway roster could not be read'}`}
                         </p>
                       </div>
                       <div className="dsm-workbuddy-xdpool-models-actions">

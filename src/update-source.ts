@@ -109,6 +109,7 @@ const OVERLAY_FILES = [
   'cordis.patch.yml',
   'package.json',
   'install.ps1',
+  'install-linux.sh',
   '一键安装.bat',
   'README.md',
   'CHANGELOG.md',

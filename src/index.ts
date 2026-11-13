@@ -711,6 +711,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
     core.catalogs.cn.applySelection(modelSelectionCn ?? fallbackSelection('cn'))
     core.catalogs.global.applySelection(modelSelectionGlobal ?? fallbackSelection('global'))
+    // Host's model list is cached per adapter profile until the profile object
+    // changes; catalog.applySelection() only updates this plugin's catalog. A
+    // save therefore needs to invalidate both adapters here so the very next
+    // picker open sees the newly enabled ids (notably `hy4free`) without a
+    // host restart. Before adapters register this is the initial no-op above.
+    invalidateCatalog()
     // The automation reads the same settings document, so a save on the card
     // re-arms it without a host restart. An absent block means off, which is why
     // this passes `enabled: false` explicitly rather than leaving it undefined.

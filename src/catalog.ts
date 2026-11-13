@@ -49,6 +49,7 @@ export interface WorkBuddyModelInfo {
 export const FALLBACK_WORKBUDDY_MODELS: readonly WorkBuddyModelInfo[] = [
   { id: 'auto', name: 'Auto', contextWindow: 256_000, maxOutputTokens: 32_000, supportsImages: true },
   { id: 'hy4-preview', name: 'Hy4 preview', contextWindow: 1_000_000, maxOutputTokens: 64_000, supportsImages: true, multiplier: 0.29 },
+  { id: 'hy4free', name: 'Hy4', contextWindow: 960_000, maxOutputTokens: 64_000, supportsImages: false, multiplier: 0 },
   { id: 'hy3', name: 'Hy3', contextWindow: 192_000, maxOutputTokens: 64_000, supportsImages: true, multiplier: 0 },
   { id: 'hy3-x', name: 'Hy3', contextWindow: 192_000, maxOutputTokens: 64_000, supportsImages: true, multiplier: 0.05 },
   { id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash', contextWindow: 1_000_000, maxOutputTokens: 128_000, supportsImages: true, multiplier: 0.11 },
